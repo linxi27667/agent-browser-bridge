@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# 运行产物（截图/快照/CSV 等），绝不入库
+artifacts/*
+!artifacts/.gitkeep
+
+# Debug Profile 数据：含 Cookie/登录态，绝不入库
+profiles/*
+!profiles/.gitkeep
+
+# AI 工具 skill 发现入口（junction 指向 skills/）：本地机制，clone 后用 scripts/Setup-SkillLinks.ps1 重建
+.agents/
+.claude/
+.codex/
+
+# 临时文件
+*.log
+.DS_Store
+Thumbs.db
+# Excluded source-only business-specific helpers
+lib/cdp/gate.js
+lib/cdp/element-ui.js
+tests/gate.test.cjs

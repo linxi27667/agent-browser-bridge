@@ -1,0 +1,18 @@
+{
+  "name": "agent-browser-bridge",
+  "version": "0.1.0",
+  "description": "Local, profile-verified browser bridge for Edge and Chrome",
+  "private": true,
+  "main": "lib/cdp/index.js",
+  "scripts": {
+    "test": "node --test tests/core.test.cjs tests/reuse.test.cjs",
+    "check": "node cli/check.cjs",
+    "smoke": "node cli/smoke.cjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
