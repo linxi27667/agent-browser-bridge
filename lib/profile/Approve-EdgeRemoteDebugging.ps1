@@ -13,15 +13,20 @@ $btnCond = New-Object System.Windows.Automation.PropertyCondition (
     '允许'
 )
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+$clicked = 0
 while ((Get-Date) -lt $deadline) {
     $button = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
     if ($button) {
         $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Write-Output 'clicked-allow'
-        exit 0
+        $clicked++
+        Write-Output "clicked-allow-$clicked"
+        Start-Sleep -Milliseconds 400
+        continue
     }
+    if ($clicked -gt 0 -and $clicked -ge 2) { exit 0 }
     Start-Sleep -Milliseconds 300
 }
 
+if ($clicked -gt 0) { exit 0 }
 Write-Output 'allow-prompt-not-found'
 exit 2

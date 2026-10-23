@@ -49,6 +49,13 @@ For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BR
 
 check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check safe connection, page targeting, and input handling.
 
+To verify the existing Edge session with both this bridge and Playwright on the same browser WebSocket:
+
+    pwsh -NoProfile -File .\lib\profile\Connect-ExistingEdge.ps1
+    npm run verify:combined
+
+`verify:combined` only uses isolated `about:blank` pages. It does not close the daily Edge window. Official Chrome DevTools MCP is optional and still cannot use `/json/version` on Edge 156 default profiles.
+
 ## Browser support
 
 | Browser | Connection | Sign-in state |

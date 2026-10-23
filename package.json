@@ -7,10 +7,14 @@
   "scripts": {
     "test": "node --test tests/core.test.cjs tests/reuse.test.cjs",
     "check": "node cli/check.cjs",
-    "smoke": "node cli/smoke.cjs"
+    "smoke": "node cli/smoke.cjs",
+    "verify:combined": "node scripts/verify-combined-edge.cjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.1"
   },
   "engines": {
     "node": ">=22"
