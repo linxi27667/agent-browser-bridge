@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
-for (const key of ['CDP_HTTP', 'BROWSER_BRIDGE_REQUIRE_INSTANCE', 'BROWSER_BRIDGE_ATTACH_EXISTING', 'BROWSER_BRIDGE_EXPECT_PROFILE', 'BROWSER_BRIDGE_EXPECT_PROXY', 'BROWSER_BRIDGE_EXPECT_BROWSER', 'BROWSER_BRIDGE_WS_TIMEOUT_MS']) {
+for (const key of ['CDP_HTTP', 'BROWSER_BRIDGE_REQUIRE_INSTANCE', 'BROWSER_BRIDGE_ATTACH_EXISTING', 'BROWSER_BRIDGE_EXPECT_PROFILE', 'BROWSER_BRIDGE_EXPECT_PROXY', 'BROWSER_BRIDGE_EXPECT_BROWSER', 'BROWSER_BRIDGE_WS_TIMEOUT_MS', 'BROWSER_BRIDGE_DAEMON_OWNER']) {
   delete process.env[key];
 }
 const cdp = require('../lib/cdp');

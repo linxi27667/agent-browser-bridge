@@ -22,7 +22,7 @@ const cdp = require('../lib/cdp');
     },
     protocol: info['Protocol-Version'],
     browserVersion: info.Browser,
-    capabilities: ['instance-identity', 'explicit-target', 'native-input', 'native-click', 'unique-read', 'selector-wait', 'user-auth-wait', 'unique-image-capture', 'desktop-named-button', 'checked-evaluation', 'bounded-wait'],
+    capabilities: ['instance-identity', 'explicit-target', 'native-input', 'native-click', 'unique-read', 'selector-wait', 'user-auth-wait', 'unique-image-capture', 'desktop-named-button', 'local-debug-proxy', 'checked-evaluation', 'bounded-wait'],
     businessWrites: 0
   }));
 })().catch(error => {

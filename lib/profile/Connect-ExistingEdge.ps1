@@ -53,7 +53,7 @@ if (-not $port) {
     throw 'Edge 已运行，但没有有效的 DevToolsActivePort。请打开 edge://inspect/#remote-debugging 勾选“允许对此浏览器实例进行远程调试”，不要反复重启默认 profile。'
 }
 
-Write-Host "即将连接当前已登录的 Edge（127.0.0.1:$port）。若弹出远程调试授权，脚本会自动点击“允许”；也可以你自己点。不会关闭或新开浏览器。"
+Write-Host "即将连接当前已登录的 Edge（127.0.0.1:$port）。首次会弹出远程调试授权，脚本会点“允许”；之后复用本机 127.0.0.1:19322 代理，不应再弹。不会关闭或新开浏览器。"
 
 $env:CDP_HTTP = "http://127.0.0.1:$port"
 $env:BROWSER_BRIDGE_REQUIRE_INSTANCE = '1'

@@ -4,7 +4,7 @@ const cdp = require('../lib/cdp');
 (async () => {
   await cdp.identity.verify();
   const wsUrl = cdp.resolveBrowserWsUrl();
-  const bridge = cdp.connectBrowser();
+  const bridge = await cdp.connectBrowser();
   let created;
   try {
     const version = await bridge.send('Browser.getVersion');

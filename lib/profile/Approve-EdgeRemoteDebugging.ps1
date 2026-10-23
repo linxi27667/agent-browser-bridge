@@ -8,14 +8,19 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
-$btnCond = New-Object System.Windows.Automation.PropertyCondition (
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    '允许'
-)
+$names = @('允许', 'Allow')
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $clicked = 0
 while ((Get-Date) -lt $deadline) {
-    $button = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
+    $button = $null
+    foreach ($name in $names) {
+        $btnCond = New-Object System.Windows.Automation.PropertyCondition (
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $name
+        )
+        $button = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $btnCond)
+        if ($button) { break }
+    }
     if ($button) {
         $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $clicked++

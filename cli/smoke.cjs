@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const cdp = require('../lib/cdp');
 (async () => {
   await cdp.identity.verify();
-  const browser = cdp.connectBrowser();
+  const browser = await cdp.connectBrowser();
   let target, page;
   try {
     target = await browser.send('Target.createTarget', { url: 'about:blank', background: true });

@@ -7,7 +7,7 @@
 - 页面操作必须带上下文守卫：`waitForSelector`、`fillNative`、`clickNative`/`clickByBox`、`readUnique`。
 - 登录和验证码默认由用户在可见窗口完成：`inspectAuth` / `waitForUserAuth` 等待遮罩消失；`captureUniquePng` 只截取唯一节点，供调用方阅读。不保存密码，不调用第三方打码。
 - 可选桌面控制：`lib/desktop/invokeNamedButton.js` 点击当前用户会话里指定名称的按钮，建议同时给出窗口标题。Cursor Computer Use 只作为智能体会话里的视觉兜底。
-- 连接现有 Edge 时运行 `lib/profile/Connect-ExistingEdge.ps1`。用户先在 `edge://inspect/#remote-debugging` 勾选允许远程调试；`/json/version` 返回 404 是 Edge 156 默认 profile 的正常现象。脚本读取 `DevToolsActivePort`，连接 browser WebSocket，用 `Target.attachToTarget` 操作页面。弹出授权时点“允许”。不要给默认 profile 加 `--remote-debugging-port` 反复重启。专用 profile 仍用 `lib/profile/Start-DebugBrowser.ps1`，需要单独登录。
+- 连接现有 Edge 时运行 `lib/profile/Connect-ExistingEdge.ps1`。用户先在 `edge://inspect/#remote-debugging` 勾选允许远程调试；`/json/version` 返回 404 是 Edge 156 默认 profile 的正常现象。脚本读取 `DevToolsActivePort`，向 Edge 只建立一条 browser WebSocket，并在 `127.0.0.1:19322` 做本地代理。首次弹出“是否允许远程调试？”时点“允许”；之后 check/smoke/Playwright 走代理，不再反复弹窗。不要给默认 profile 加 `--remote-debugging-port` 反复重启。专用 profile 仍用 `lib/profile/Start-DebugBrowser.ps1`，需要单独登录。
 - 现有 profile 的会话数据可被本机自动化进程访问；只访问用户点名的站点和页面，不读取无关标签页。业务系统登录、二步验证和验证码仍由用户处理；桥接只负责检测、等待和按需截图。
 - 陌生页面探索可以另选支持 CDP 的浏览器代理工具；固定流程再写成调用脚本或 Skill。
 - Firefox、Safari 等不同引擎需要单独接入 Playwright 或 WebDriver。本版本不声称已经支持它们。

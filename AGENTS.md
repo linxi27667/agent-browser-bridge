@@ -2,7 +2,7 @@
 
 - Use only an explicitly selected local browser and debug port.
 - The bridge supports Microsoft Edge and Google Chrome through their Chromium DevTools Protocol.
-- Default to a dedicated profile outside this repository. If the user explicitly selects and authorizes their already-open Edge session, use `lib/profile/Connect-ExistingEdge.ps1`. Enable `edge://inspect/#remote-debugging`, click Allow on the prompt, and attach through the browser WebSocket. `/json/version` 404 on the default profile is expected. Never copy cookies or silently switch profiles.
+- Default to a dedicated profile outside this repository. If the user explicitly selects and authorizes their already-open Edge session, use `lib/profile/Connect-ExistingEdge.ps1`. Enable `edge://inspect/#remote-debugging`, click Allow on the first prompt, and keep the local proxy (`npm run serve`, 127.0.0.1:19322) running so later commands do not open a new Edge debugger socket. `/json/version` 404 on the default profile is expected. Never copy cookies or silently switch profiles.
 - Sign-in is user-managed by default. Wait with `waitForUserAuth` and, if needed, capture a unique captcha image with `captureUniquePng` so the user or caller can read it. Never print or store passwords, cookies, tokens, captcha images, or browser profiles in Git. Never call a third-party captcha-solving service.
 - Optional desktop control is `lib/desktop/invokeNamedButton.js`: click an explicitly named button, preferably inside a named window, in the current user session. Cursor Computer Use may be used as a visual fallback in an agent session. Never close or terminate a user's browser this way.
 - Check the browser process, selected browser type, loopback address, port, profile, and proxy before reading any page.

@@ -22,9 +22,9 @@ Use this only when the user explicitly asks to reuse the Edge window they alread
 
     pwsh -NoProfile -File .\lib\profile\Connect-ExistingEdge.ps1
 
-The launcher waits for Edge's “是否允许远程调试？” prompt and clicks 允许 in the current user session. You can still click it yourself.
+The first attach may show Edge's “是否允许远程调试？” prompt. The launcher clicks 允许 and keeps a local proxy at `http://127.0.0.1:19322`. Later commands reuse that proxy, so Edge should not prompt again until the proxy or Edge restarts. You can still click 允许 yourself.
 
-The script attaches to a running default Edge profile after the user enables `edge://inspect/#remote-debugging`. Newer Edge/Chromium builds keep `/json/version` at 404 on the default profile; that is expected. The bridge reads `DevToolsActivePort`, connects to the browser WebSocket, and drives pages with `Target.attachToTarget`. Click Allow if Edge prompts. Do not restart the default profile with `--remote-debugging-port`. The dedicated-profile origin (`http://agent-browser-bridge.invalid`) stays on the isolated launcher only.
+The script attaches to a running default Edge profile after the user enables `edge://inspect/#remote-debugging`. Newer Edge/Chromium builds keep `/json/version` at 404 on the default profile; that is expected. The bridge reads `DevToolsActivePort`, opens one browser WebSocket, and drives pages with `Target.attachToTarget`. Do not restart the default profile with `--remote-debugging-port`. The dedicated-profile origin (`http://agent-browser-bridge.invalid`) stays on the isolated launcher only.
 
 The existing-session mode is Windows-only and limited to the default Edge User Data directory. It verifies the loopback listener owner, Edge executable, active port file, default profile, and proxy flags, then confirms browser identity over the WebSocket. If the policy `RemoteDebuggingAllowed` is disabled, the script stops without changing policy.
 
