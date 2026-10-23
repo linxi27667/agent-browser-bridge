@@ -47,7 +47,7 @@ The launcher prints the local CDP address. Set the same values before using the 
 
 For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BRIDGE_EXPECT_BROWSER.
 
-check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check safe connection, page targeting, and input handling.
+check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, readback, captcha-image capture, and user-auth wait. `npm test` also clicks an isolated local desktop dialog through UI Automation.
 
 To verify the existing Edge session with both this bridge and Playwright on the same browser WebSocket:
 
@@ -70,6 +70,7 @@ To verify the existing Edge session with both this bridge and Playwright on the 
 - The debug endpoint listens on 127.0.0.1 only.
 - The bridge refuses an unexpected browser, port, profile, or proxy.
 - Never attach to a normal daily browser profile without explicit user authorization. Existing-profile mode inherits its active session; never copy cookies or commit profile data.
-- Complete sign-in and verification in the browser window or through a local credential procedure explicitly authorized by the calling project. Never print or save credentials.
+- Complete sign-in and captcha in the visible browser window, or through a local credential procedure explicitly authorized by the calling project. Never print or save credentials. Optional `captureUniquePng` is for reading a unique image, not for a third-party solver.
+- Optional desktop clicks (`invokeNamedButton`) are limited to an explicit button name in the current user session.
 - A CDP debug port grants control of that dedicated browser to local software. Close the dedicated window when finished.
 - This project does not bypass site controls, authentication, or approval rules.

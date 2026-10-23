@@ -20,20 +20,12 @@ const cdp = require('../lib/cdp');
     const bridgeTitle = await page.evalChecked('document.title');
     page.close();
 
-    let playwright;
-    try {
-      playwright = require('playwright-core');
-    } catch {
-      throw new Error('缺少 playwright-core。请先执行 npm i -D playwright-core');
-    }
-    const browser = await playwright.chromium.connectOverCDP(wsUrl);
-    const context = browser.contexts()[0];
-    if (!context) throw new Error('Playwright 未拿到已有浏览器上下文');
-    const pwPage = await context.newPage();
-    await pwPage.goto('about:blank');
+    const attached = await require('../lib/playwright/attachExisting').attachExistingPlaywright();
+    const pwPage = await attached.newIsolatedPage('about:blank');
     await pwPage.setContent('<title>combined-playwright</title>');
     const playwrightTitle = await pwPage.title();
     await pwPage.close();
+    attached.disconnect();
 
     console.log(JSON.stringify({
       ok: true,

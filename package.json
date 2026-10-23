@@ -1,11 +1,11 @@
 {
   "name": "agent-browser-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local, profile-verified browser bridge for Edge and Chrome",
   "private": true,
   "main": "lib/cdp/index.js",
   "scripts": {
-    "test": "node --test tests/core.test.cjs tests/reuse.test.cjs",
+    "test": "node --test tests/core.test.cjs tests/reuse.test.cjs tests/auth.test.cjs tests/desktop.test.cjs",
     "check": "node cli/check.cjs",
     "smoke": "node cli/smoke.cjs",
     "verify:combined": "node scripts/verify-combined-edge.cjs"

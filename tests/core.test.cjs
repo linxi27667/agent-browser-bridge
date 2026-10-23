@@ -47,6 +47,39 @@ test('input is stopped before write when context guard fails', async () => {
   await assert.rejects(cdp.fillNative(fake, '#input', 'text', 'guard'), /guard/);
   assert.equal(writes, 0);
 });
+test('click and unique read stop when the context guard fails', async () => {
+  let calls = 0;
+  const fake = { evalChecked: async () => false, send: async () => calls++ };
+  await assert.rejects(cdp.clickNative(fake, '#submit', 'guard'), /guard/);
+  await assert.rejects(cdp.clickByBox(fake, '#submit', 'guard'), /guard/);
+  await assert.rejects(cdp.readUnique(fake, '#result', 'guard'), /guard/);
+  assert.equal(calls, 0);
+});
+test('coordinate click uses the unique element box center', async () => {
+  const sent = [];
+  const fake = {
+    evalChecked: async expression => {
+      if (expression === 'true') return true;
+      return { x: 10, y: 20, width: 40, height: 10 };
+    },
+    send: async (method, params) => sent.push({ method, params })
+  };
+  const result = await cdp.clickByBox(fake, '#go', 'true');
+  assert.equal(result.x, 30);
+  assert.equal(result.y, 25);
+  assert.equal(sent.filter(item => item.method === 'Input.dispatchMouseEvent').length, 3);
+});
+test('selector wait and box click reject unsafe targets before acting', async () => {
+  await assert.rejects(cdp.waitForSelector({ evalChecked: async () => true }, '', 'true'), /selector and context guard/);
+  await assert.rejects(cdp.clickNative({ evalChecked: async () => true, send: async () => {} }, '#go', '  '), /selector and context guard/);
+  const sent = [];
+  const fake = {
+    evalChecked: async expression => expression === 'true' ? true : { x: 0, y: 0, width: 2, height: 2 },
+    send: async (method, params) => sent.push({ method, params })
+  };
+  await assert.rejects(cdp.clickByBox(fake, '#tiny', 'true'), /not clickable/);
+  assert.equal(sent.length, 0);
+});
 test('wait is bounded and page errors are not ignored', async () => {
   await assert.rejects(cdp.waitFor({ evalChecked: async () => false }, 'ready', { timeoutMs: 10, intervalMs: 2 }), /timed out/);
   await assert.rejects(cdp.waitFor({ evalChecked: async () => { throw Error('page error'); } }, 'ready'), /page error/);
