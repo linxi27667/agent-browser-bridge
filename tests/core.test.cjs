@@ -2,6 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
+for (const key of ['CDP_HTTP', 'BROWSER_BRIDGE_REQUIRE_INSTANCE', 'BROWSER_BRIDGE_ATTACH_EXISTING', 'BROWSER_BRIDGE_EXPECT_PROFILE', 'BROWSER_BRIDGE_EXPECT_PROXY', 'BROWSER_BRIDGE_EXPECT_BROWSER', 'BROWSER_BRIDGE_WS_TIMEOUT_MS']) {
+  delete process.env[key];
+}
 const cdp = require('../lib/cdp');
 const profile = path.resolve('test-profile');
 const config = { port: 9222, profile, proxy: 'none' };
@@ -89,4 +92,43 @@ test('Edge and Chrome processes are matched only to their selected browser type'
   assert.equal(cdp.identity.validateProcess(edge, edgeConfig).browser, 'edge');
   assert.throws(() => cdp.identity.validateProcess(info, edgeConfig), /Browser type mismatch/);
   assert.throws(() => cdp.identity.validateProcess(edge, { ...config, browser: 'chrome' }), /Browser type mismatch/);
+});
+test('existing Edge attachment accepts default profile without HTTP version', () => {
+  const localApp = process.env.LOCALAPPDATA || 'C:\\Users\\tester\\AppData\\Local';
+  const edgeData = path.join(localApp, 'Microsoft', 'Edge', 'User Data');
+  const cfg = cdp.resolveConfig({
+    CDP_HTTP: 'http://127.0.0.1:9222',
+    BROWSER_BRIDGE_REQUIRE_INSTANCE: '1',
+    BROWSER_BRIDGE_EXPECT_PROFILE: edgeData,
+    BROWSER_BRIDGE_EXPECT_PROXY: 'none',
+    BROWSER_BRIDGE_EXPECT_BROWSER: 'edge',
+    BROWSER_BRIDGE_ATTACH_EXISTING: '1',
+    LOCALAPPDATA: localApp
+  });
+  assert.equal(cfg.attachExisting, true);
+  const edge = {
+    pid: 11,
+    name: 'msedge.exe',
+    loopback: true,
+    command: '"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"',
+    executablePath: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    signatureStatus: 'Valid',
+    signerSubject: 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US',
+    activePort: { port: 9222, browserPath: '/devtools/browser/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }
+  };
+  assert.equal(cdp.identity.validateProcess(edge, cfg).attachExisting, true);
+});
+test('flattened session commands carry sessionId', async t => {
+  let received;
+  const client = await mockServer(t, (socket, msg) => {
+    received = msg;
+    socket.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: { ok: true } }));
+  });
+  const result = await client.send('Page.enable', {}, 'sess-1');
+  assert.equal(received.sessionId, 'sess-1');
+  assert.equal(result.ok, true);
+});
+test('Target.getTargets maps to listTargets ids', () => {
+  const mapped = cdp.mapTargetInfos([{ targetId: 'T1', type: 'page', title: 'Blank', url: 'about:blank' }]);
+  assert.equal(cdp.requireTarget(mapped, { id: 'T1' }).url, 'about:blank');
 });

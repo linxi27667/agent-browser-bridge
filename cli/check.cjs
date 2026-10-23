@@ -2,7 +2,7 @@
 const cdp = require('../lib/cdp');
 
 (async () => {
-  for (const key of ['resolveCdpHttp', 'createCdp', 'getJson', 'requireTarget', 'fillNative', 'waitFor']) {
+  for (const key of ['resolveCdpHttp', 'createCdp', 'getJson', 'requireTarget', 'fillNative', 'waitFor', 'connectBrowser', 'attachTarget']) {
     if (typeof cdp[key] !== 'function') throw new Error('Missing required API: ' + key);
   }
   const identity = await cdp.identity.verify();

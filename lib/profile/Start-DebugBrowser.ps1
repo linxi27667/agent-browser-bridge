@@ -69,6 +69,7 @@ $quote = [char]34
 $arguments = @(
     '--remote-debugging-address=127.0.0.1',
     "--remote-debugging-port=$Port",
+    '--remote-allow-origins=http://agent-browser-bridge.invalid',
     ('--user-data-dir=' + $quote + $ProfileRoot + $quote),
     '--no-first-run',
     '--no-default-browser-check'
