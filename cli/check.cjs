@@ -2,11 +2,12 @@
 const cdp = require('../lib/cdp');
 
 (async () => {
-  for (const key of ['resolveCdpHttp', 'createCdp', 'getJson', 'requireTarget', 'fillNative', 'waitFor', 'waitForSelector', 'clickNative', 'clickByBox', 'readUnique', 'inspectAuth', 'waitForUserAuth', 'captureUniquePng', 'connectBrowser', 'attachTarget']) {
+  for (const key of ['resolveCdpHttp', 'createCdp', 'getJson', 'requireTarget', 'fillNative', 'waitFor', 'waitForSelector', 'clickNative', 'clickByBox', 'dragByBox', 'pressKey', 'selectOption', 'readUnique', 'inspectAuth', 'waitForUserAuth', 'captureUniquePng', 'connectBrowser', 'attachTarget']) {
     if (typeof cdp[key] !== 'function') throw new Error('Missing required API: ' + key);
   }
-  if (typeof require('../lib/desktop/invokeNamedButton').invokeNamedButton !== 'function') {
-    throw new Error('Missing required API: invokeNamedButton');
+  const desktop = require('../lib/desktop');
+  for (const key of ['invokeNamedButton', 'focusNamedWindow', 'sendKeysToNamedWindow', 'captureNamedWindow']) {
+    if (typeof desktop[key] !== 'function') throw new Error('Missing required API: ' + key);
   }
   const identity = await cdp.identity.verify();
   const info = await cdp.getJson('/json/version');
@@ -22,7 +23,7 @@ const cdp = require('../lib/cdp');
     },
     protocol: info['Protocol-Version'],
     browserVersion: info.Browser,
-    capabilities: ['instance-identity', 'explicit-target', 'native-input', 'native-click', 'unique-read', 'selector-wait', 'user-auth-wait', 'unique-image-capture', 'desktop-named-button', 'local-debug-proxy', 'checked-evaluation', 'bounded-wait'],
+    capabilities: ['instance-identity', 'explicit-target', 'native-input', 'native-click', 'box-drag', 'named-key', 'select-option', 'unique-read', 'selector-wait', 'user-auth-wait', 'unique-image-capture', 'desktop-named-button', 'desktop-named-window', 'local-debug-proxy', 'checked-evaluation', 'bounded-wait'],
     businessWrites: 0
   }));
 })().catch(error => {

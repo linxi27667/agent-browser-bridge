@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-bridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local, profile-verified browser bridge for Edge and Chrome",
   "private": true,
   "main": "lib/cdp/index.js",

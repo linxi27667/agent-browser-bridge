@@ -52,6 +52,9 @@ test('click and unique read stop when the context guard fails', async () => {
   const fake = { evalChecked: async () => false, send: async () => calls++ };
   await assert.rejects(cdp.clickNative(fake, '#submit', 'guard'), /guard/);
   await assert.rejects(cdp.clickByBox(fake, '#submit', 'guard'), /guard/);
+  await assert.rejects(cdp.dragByBox(fake, '#from', '#to', 'guard'), /guard/);
+  await assert.rejects(cdp.pressKey(fake, 'Enter', 'guard'), /guard/);
+  await assert.rejects(cdp.selectOption(fake, '#color', 'red', 'guard'), /guard/);
   await assert.rejects(cdp.readUnique(fake, '#result', 'guard'), /guard/);
   assert.equal(calls, 0);
 });
@@ -68,6 +71,46 @@ test('coordinate click uses the unique element box center', async () => {
   assert.equal(result.x, 30);
   assert.equal(result.y, 25);
   assert.equal(sent.filter(item => item.method === 'Input.dispatchMouseEvent').length, 3);
+});
+test('box drag moves from one unique element to another', async () => {
+  const sent = [];
+  const fake = {
+    evalChecked: async expression => {
+      if (expression === 'true') return true;
+      if (expression.includes('#from')) return { x: 10, y: 20, width: 20, height: 10 };
+      return { x: 80, y: 40, width: 20, height: 10 };
+    },
+    send: async (method, params) => sent.push({ method, params })
+  };
+  const result = await cdp.dragByBox(fake, '#from', '#to', 'true', { steps: 3 });
+  assert.equal(result.from.x, 20);
+  assert.equal(result.to.x, 90);
+  const moves = sent.filter(item => item.method === 'Input.dispatchMouseEvent');
+  assert.ok(moves.some(item => item.params.type === 'mousePressed'));
+  assert.ok(moves.some(item => item.params.type === 'mouseMoved' && item.params.buttons === 1));
+  assert.equal(moves.at(-1).params.type, 'mouseReleased');
+});
+test('pressKey only allows Enter, Tab or Escape', async () => {
+  const sent = [];
+  const fake = { evalChecked: async () => true, send: async (method, params) => sent.push({ method, params }) };
+  await assert.rejects(cdp.pressKey(fake, 'a', 'true'), /Enter, Tab, or Escape/);
+  await cdp.pressKey(fake, 'Enter', 'true');
+  assert.equal(sent.filter(item => item.method === 'Input.dispatchKeyEvent').length, 2);
+});
+test('selectOption writes value and reads it back', async () => {
+  let wrote = false;
+  const fake = {
+    evalChecked: async expression => {
+      if (expression === 'true') return true;
+      wrote = true;
+      return { value: 'red', text: '红' };
+    },
+    send: async () => { throw new Error('select must not use raw input'); }
+  };
+  const result = await cdp.selectOption(fake, '#color', '红', 'true');
+  assert.equal(wrote, true);
+  assert.equal(result.value, 'red');
+  assert.equal(result.text, '红');
 });
 test('selector wait and box click reject unsafe targets before acting', async () => {
   await assert.rejects(cdp.waitForSelector({ evalChecked: async () => true }, '', 'true'), /selector and context guard/);

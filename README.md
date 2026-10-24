@@ -37,7 +37,7 @@ The launcher prints the local CDP address. Set the same values before using the 
 
 For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BRIDGE_EXPECT_BROWSER.
 
-check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, readback, captcha-image capture, and user-auth wait. `npm test` also clicks an isolated local desktop dialog through UI Automation.
+check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, and user-auth wait. `npm test` also clicks an isolated local desktop dialog through UI Automation.
 
 Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the dedicated window after check/smoke.
 
@@ -56,6 +56,6 @@ Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the
 - The bridge refuses an unexpected browser, port, profile, or proxy.
 - Never attach to a normal daily browser profile unless the user explicitly asks again. Never copy cookies or commit profile data.
 - Look up credentials in the local Obsidian password book. If missing, ask the user and write the entry there. Never print or save credentials in Git. Optional `captureUniquePng` is for reading a unique image, not for a third-party solver.
-- Optional desktop clicks (`invokeNamedButton`) are limited to an explicit button name in the current user session.
+- Optional desktop clicks (`invokeNamedButton`) need an explicit button name. Window-level helpers (`focusNamedWindow`, `sendKeysToNamedWindow`, `captureNamedWindow`) need an exact window title. They do not close windows (Alt+F4 is refused).
 - A CDP debug port grants control of that dedicated browser to local software. Close the dedicated window when finished.
 - This project does not bypass site controls, authentication, or approval rules.
