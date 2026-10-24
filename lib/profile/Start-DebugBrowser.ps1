@@ -52,16 +52,42 @@ if (-not $ExecutablePath -or -not (Test-Path -LiteralPath $ExecutablePath -PathT
     throw "未找到 $Browser。请安装浏览器，或通过 -ExecutablePath 指定其程序路径。"
 }
 
-$listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
-if ($listener) {
-    throw "本地端口 $Port 已被占用。为避免连错浏览器，请换一个空闲端口。"
+function Get-CommandFlag([string]$Command, [string]$Name) {
+    $pattern = '(?:^|\s)' + [regex]::Escape($Name) + '=(?:"([^"]+)"|(\S+))'
+    $match = [regex]::Match($Command, $pattern)
+    if (-not $match.Success) { return $null }
+    if ($match.Groups[1].Value) { return $match.Groups[1].Value }
+    return $match.Groups[2].Value
+}
+
+function Test-CdpReady([int]$ListenPort) {
+    try {
+        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$ListenPort/json/version" -TimeoutSec 2
+        return [bool]$version.Browser
+    } catch {
+        return $false
+    }
 }
 
 $processName = [System.IO.Path]::GetFileName($ExecutablePath)
-$running = Get-CimInstance Win32_Process -Filter "Name='$processName'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.Contains($ProfileRoot) }
-if ($running) {
-    throw '这个专用浏览器配置正在运行。请使用已配置的端口，或选择另一配置目录。'
+$running = @(Get-CimInstance Win32_Process -Filter "Name='$processName'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($ProfileRoot.ToLower()) })
+if ($running.Count -gt 0) {
+    $actualPort = [int](Get-CommandFlag $running[0].CommandLine '--remote-debugging-port')
+    if (-not $actualPort) { throw '专用窗口已在运行，但读不到远程调试端口。请检查该窗口后重试。' }
+    if (-not (Test-CdpReady $actualPort)) {
+        throw "专用窗口已在运行，但 http://127.0.0.1:$actualPort/json/version 未就绪。未关闭浏览器。"
+    }
+    Write-Host "$Browser 专用窗口已在运行，复用现有连接。"
+    Write-Host "本地桥接：http://127.0.0.1:$actualPort"
+    Write-Host "配置目录：$ProfileRoot"
+    Write-Host '登录先查 Obsidian 密码簿；不要把该配置目录提交到 Git。'
+    exit 0
+}
+
+$listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
+if ($listener) {
+    throw "本地端口 $Port 已被占用。为避免连错浏览器，请换一个空闲端口。"
 }
 
 New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
@@ -98,5 +124,5 @@ if (-not $ready) {
 Write-Host "$Browser 专用窗口已启动。"
 Write-Host "本地桥接：$endpoint"
 Write-Host "配置目录：$ProfileRoot"
-Write-Host '请在窗口中手动登录；登录信息只保存在本机配置目录。'
+Write-Host '登录先查 Obsidian 密码簿，在此窗口登录一次即可复用。'
 Write-Host '不要把该配置目录提交到 Git。'
