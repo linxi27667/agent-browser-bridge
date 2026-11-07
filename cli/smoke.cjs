@@ -51,7 +51,40 @@ const cdp = require('../lib/cdp');
     assert.equal(await cdp.readUnique(page, '#log', guard), 'escape');
     await cdp.pressKey(page, 'Tab', guard);
     assert.equal(await cdp.readUnique(page, '#log', guard), 'tab');
-    console.log(JSON.stringify({ ok: true, version: cdp.version, fixture: 'isolated about:blank', checks: ['exact-target', 'selector-wait', 'native-Chinese-input', 'native-click-readback', 'box-click-readback', 'captcha-image-capture', 'user-auth-wait', 'page-exception-rejected', 'wrong-context-rejected', 'box-drag-readback', 'select-option-readback', 'enter-tab-escape'], businessWrites: 0 }));
+
+    // 专属工作页租约：多 Agent 默认各自开 Tab，互不抢同一 target
+    await cdp.withDedicatedTab({ url: 'about:blank', ownerTag: 'smoke-dedicated' }, async (dedicatedPage, { targetId }) => {
+      assert.ok(targetId);
+      assert.ok(dedicatedPage.autoUiLock);
+      const res = await dedicatedPage.eval('document.title = "dedicated-smoke"');
+      assert.equal(res.result.value, 'dedicated-smoke');
+    });
+
+    // 双任务并发：各自专属 Tab + UI 短锁自动排队，结果互不串扰
+    const runDedicatedTask = (id, taskText) =>
+      cdp.withDedicatedTab({ url: 'about:blank', ownerTag: 'concurrent-' + id }, async (tabCdp) => {
+        await tabCdp.send('Page.enable');
+        const frameTree = await tabCdp.send('Page.getFrameTree');
+        await tabCdp.send('Page.setDocumentContent', {
+          frameId: frameTree.frameTree.frame.id,
+          html: `<title>concurrent-${id}</title><input id="c-input"><button id="c-btn">Click</button><output id="c-out"></output><script>document.querySelector("#c-btn").onclick=()=>document.querySelector("#c-out").textContent="out-" + document.querySelector("#c-input").value;</script>`,
+        });
+        const g = `location.href === "about:blank" && document.title === "concurrent-${id}"`;
+        await cdp.waitForSelector(tabCdp, '#c-input', g);
+        await cdp.fillNative(tabCdp, '#c-input', taskText, g);
+        await cdp.clickNative(tabCdp, '#c-btn', g);
+        const out = await cdp.readUnique(tabCdp, '#c-out', g);
+        return { id, out };
+      });
+
+    const [t1, t2] = await Promise.all([
+      runDedicatedTask('A', '任务A-20261107'),
+      runDedicatedTask('B', '任务B-20261107'),
+    ]);
+    assert.equal(t1.out, 'out-任务A-20261107');
+    assert.equal(t2.out, 'out-任务B-20261107');
+
+    console.log(JSON.stringify({ ok: true, version: cdp.version, fixture: 'isolated about:blank', checks: ['exact-target', 'selector-wait', 'native-Chinese-input', 'native-click-readback', 'box-click-readback', 'captcha-image-capture', 'user-auth-wait', 'page-exception-rejected', 'wrong-context-rejected', 'box-drag-readback', 'select-option-readback', 'enter-tab-escape', 'dedicated-tab-lease', 'concurrent-dual-task'], businessWrites: 0 }));
   } finally {
     if (page) page.close();
     if (target) await browser.send('Target.closeTarget', { targetId: target.targetId }).catch(() => {});

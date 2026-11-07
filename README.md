@@ -1,8 +1,30 @@
 # Agent Browser Bridge
 
-A small local bridge that lets Codex connect to a dedicated Microsoft Edge or Google Chrome debug window.
+A small local bridge that lets Codex / Cursor agents connect to a dedicated Microsoft Edge or Google Chrome debug window.
 
 It supports Edge and Chrome on Windows through the same Chromium DevTools Protocol. Default to a dedicated profile with `--remote-debugging-port`; that path does not show the Edge Allow prompt. Each connection is checked against its local debug port, browser type, profile folder, and proxy setting before page access.
+
+## Multi-agent concurrency (0.6.0)
+
+When several agents share one debug browser, they used to fight over the same tab and foreground focus. This release merges GcWebAuto’s serverless lock model:
+
+| Mechanism | API | Role |
+| --- | --- | --- |
+| Target lease | `acquireTargetLease` / `withDedicatedTab` | One task per `targetId`; conflict throws `CDP_TARGET_LEASED` |
+| UI short lock | `withUiLock` (auto via `page.autoUiLock`) | Serialize click / fill / drag / key / screenshot on one port |
+| Activate tab | `activateTarget` | Bring the leased tab to the front inside the UI lock |
+
+Recommended pattern:
+
+```js
+const cdp = require('./lib/cdp');
+await cdp.withDedicatedTab({ url: 'about:blank', ownerTag: 'agent-A' }, async (page, { targetId }) => {
+  // page.autoUiLock === true；fillNative / clickByBox 等会自动排队
+  await cdp.fillNative(page, '#q', 'text', 'location.href === "about:blank"');
+});
+```
+
+Same site + same account writes must still be serial at the business layer. Heavy or multi-account work should use another `-Scene` / port. Lock files: `%LOCALAPPDATA%\AgentBrowserBridge\locks` (`BROWSER_BRIDGE_LOCK_DIR` for tests).
 
 ## Start Edge
 
@@ -37,7 +59,7 @@ The launcher prints the local CDP address. Set the same values before using the 
 
 For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BRIDGE_EXPECT_BROWSER.
 
-check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, and user-auth wait. `npm test` also clicks an isolated local desktop dialog through UI Automation.
+check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, user-auth wait, dedicated-tab lease, and concurrent dual-task isolation. `npm test` also covers concurrency unit tests and clicks an isolated local desktop dialog through UI Automation.
 
 Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the dedicated window after check/smoke.
 

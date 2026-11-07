@@ -98,7 +98,11 @@ $arguments = @(
     '--remote-allow-origins=http://agent-browser-bridge.invalid',
     ('--user-data-dir=' + $quote + $ProfileRoot + $quote),
     '--no-first-run',
-    '--no-default-browser-check'
+    '--no-default-browser-check',
+    # 多任务后台标签不被 Chromium 节流，避免截图/坐标超时
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding'
 )
 if ($Url) { $arguments += ($quote + $Url + $quote) }
 
