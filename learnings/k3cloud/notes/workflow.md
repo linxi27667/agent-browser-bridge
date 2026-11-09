@@ -29,7 +29,7 @@
 - 首个快捷过滤字段不一定是“单据编号”（`生产入库单列表` 默认是“物料编码”），先 `k3.ensureQuickFilterField(page, '单据编号')`。
 - 只点一次蓝色放大镜 `a.kd-filterquicker-btnSearch-container`。**不要“回车 + 点按钮”**：会连发两次查询，第二次重绘会把刚出现的单号链接销毁，导致点空。
 - 每次查询后等 `.k-loading-image / .k-loading-mask` 消失再读网格或截图，否则截到转圈空表。
-- 默认方案可能带日期条件，查不到就点“重置”再查。封装：`k3.filterByBillNo(page, billNo)`。
+- 查不到时默认直接返回 `found: false`，不自动点“重置”（会改动列表过滤状态，且重置后字段下拉偶发渲染在可视区外）。确认默认方案带日期条件时再传 `{ resetOnMiss: true }`。封装：`k3.filterByBillNo(page, billNo, opts)`。
 - 已关闭（业务关闭）的单据默认不在列表里。11-09 实测：`26GC054` 在销售出库单审核后变为“已关闭”，销售订单列表查不到。此时从下游单据（如发货通知单）用“关联查询 → 上查”取证，可看到源单状态。
 
 ## 5. 打开单据：注意“修改”模式
@@ -37,6 +37,9 @@
 - 点蓝字单号会按当前用户权限打开，常见标题是 `xxx - 修改`。已审核单据改不了，但**创建/暂存状态的单据以修改模式打开会占用网控锁**，同事再打开会提示“…冲突，请稍候再使用”（11-09 实际撞到胡湘果正在改 `XSCKD040422`）。
 - `k3.openBill` 返回 `{ mode, billStatus, conflict, editable }`。`editable === true` 时读完必须 `k3.closeActiveBillTab(page)`；`open-bill` 工具默认自动关闭。
 - 本库从不点保存/提交/审核；关页签遇到“是否保存”一律选“否”。
+- 只读任务一律用 `withDedicatedTab({ url, readOnly: true }, fn)`：点击“保存/提交/审核/删除/下推/业务关闭…”会抛 `READ_ONLY_BLOCKED`，按钮收不到点击。`open-bill` 工具执行期间自动开启。
+- 回到登录页、被挤下线或会话超时时，`openListBySearch / filterByBillNo / openBill` 会抛 `K3_SESSION_LOST` 并停下，不自动重登、不重试。
+- 改动这些工具后，先跑 `npm run smoke:k3`（隔离页面里模拟首次加载迟到、旧列表误判、字段切换、只读拦截、掉线），再上真实金蝶。
 
 ## 6. 序列号查询
 

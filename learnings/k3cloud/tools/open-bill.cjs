@@ -8,17 +8,24 @@ module.exports = async function openBillTool(args = {}, context = {}) {
   if (!args.menuQuery || !args.billNo) throw new Error('k3cloud open-bill requires args.menuQuery and args.billNo');
   const opts = { guard: args.guardExpression || k3.K3_GUARD };
 
-  const list = await k3.openListBySearch(page, { query: args.menuQuery, needle: args.needle || args.menuQuery, exclude: args.exclude }, opts);
-  const filter = await k3.filterByBillNo(page, args.billNo, opts);
-  if (!filter.found) return { list, filter, opened: false };
+  // 本工具只读：执行期间开启只读点击拦截，结束后恢复调用方原设置
+  const prevReadOnly = page.readOnly;
+  page.readOnly = prevReadOnly || true;
+  try {
+    const list = await k3.openListBySearch(page, { query: args.menuQuery, needle: args.needle || args.menuQuery, exclude: args.exclude }, opts);
+    const filter = await k3.filterByBillNo(page, args.billNo, opts);
+    if (!filter.found) return { list, filter, opened: false };
 
-  const state = await k3.openBill(page, args.billNo, opts);
-  let serial = null;
-  if (args.serial) serial = await k3.openSerialView(page, opts);
+    const state = await k3.openBill(page, args.billNo, opts);
+    let serial = null;
+    if (args.serial) serial = await k3.openSerialView(page, opts);
 
-  let closedForSafety = false;
-  if (state.editable && !args.keepOpen) {
-    closedForSafety = await k3.closeActiveBillTab(page, opts);
+    let closedForSafety = false;
+    if (state.editable && !args.keepOpen) {
+      closedForSafety = await k3.closeActiveBillTab(page, opts);
+    }
+    return { list, filter, opened: true, state, serial, closedForSafety };
+  } finally {
+    page.readOnly = prevReadOnly;
   }
-  return { list, filter, opened: true, state, serial, closedForSafety };
 };

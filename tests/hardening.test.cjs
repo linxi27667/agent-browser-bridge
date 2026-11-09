@@ -147,3 +147,54 @@ test('clickByBox parkPointer moves the pointer away after clicking', async () =>
   assert.equal(mouse[3].x, 2);
   assert.equal(mouse[3].y, 2);
 });
+
+test('read-only mode refuses clicks on business write buttons and allows others', async () => {
+  const clicked = [];
+  const makePage = (labelText) => ({
+    readOnly: true,
+    async evalChecked(expr) {
+      if (expr.startsWith('/*abb-readonly*/')) return { own: labelText, item: labelText };
+      if (expr.includes('e.click()')) { clicked.push(labelText); return { x: 5, y: 5, rect: { x: 0, y: 0, width: 10, height: 10 } }; }
+      if (expr.includes('getBoundingClientRect')) return { x: 100, y: 100, width: 40, height: 20 };
+      return true;
+    },
+    async send(method) { if (method === 'Input.dispatchMouseEvent') clicked.push('mouse:' + labelText); return {}; },
+    async eval() { return { result: { value: true } }; },
+  });
+  await assert.rejects(cdp.clickNative(makePage('保存'), '#save', 'true'), (e) => e.code === 'READ_ONLY_BLOCKED' && e.denied === '保存');
+  await assert.rejects(cdp.clickByBox(makePage(' 审 核 '), '#audit', 'true'), (e) => e.code === 'READ_ONLY_BLOCKED');
+  assert.deepEqual(clicked, [], 'blocked buttons must never receive a click');
+  await cdp.clickByBox(makePage('查询'), '#query', 'true');
+  await cdp.clickNative(makePage('保存方案管理'), '#scheme', 'true');
+  assert.ok(clicked.includes('mouse:查询') && clicked.includes('保存方案管理'));
+  const custom = { ...makePage('导出'), readOnly: { denyText: ['导出'] } };
+  await assert.rejects(cdp.clickNative(custom, '#export', 'true'), (e) => e.code === 'READ_ONLY_BLOCKED');
+});
+
+test('a tab already driven by a debugger outside this library is reported (onForeignAttach: fail)', async () => {
+  const id = 'foreign-driven-tab';
+  const fakeBrowser = {
+    send: async (method) => {
+      if (method === 'Target.getTargets') {
+        return { targetInfos: [{ targetId: id, type: 'page', title: 'K3Cloud', url: 'http://10.1.3.38/K3Cloud/html5/index.aspx', attached: true }] };
+      }
+      return {};
+    },
+    close() {},
+    isDead: () => null,
+    on: () => () => {},
+    ready: Promise.resolve(),
+  };
+  await assert.rejects(
+    conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', onForeignAttach: 'fail' }, async () => {}),
+    (e) => e.code === 'CDP_FOREIGN_ATTACHED' && e.targetId === id
+  );
+  const t0 = Date.now();
+  await assert.rejects(
+    conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', onForeignAttach: 'wait', leaseWaitMs: 600 }, async () => {}),
+    (e) => e.code === 'CDP_TARGET_LEASED'
+  );
+  assert.ok(Date.now() - t0 >= 500, "onForeignAttach 'wait' must wait for the external debugger to detach");
+  const again = conc.acquireTargetLease({ targetId: id, heartbeat: false });
+  again.release();
+});

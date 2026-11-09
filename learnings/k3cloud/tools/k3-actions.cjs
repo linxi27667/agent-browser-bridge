@@ -15,6 +15,25 @@ function inPage(page, guard, fn, arg) {
   return page.evalChecked(expr);
 }
 
+// 掉线识别：回到登录页、被挤下线或会话超时时，抛 K3_SESSION_LOST 并停下（不自动重登、不重试业务操作）
+async function assertSession(page) {
+  const state = await page.evalChecked(`(() => {
+    const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 4 && r.height > 4; };
+    const login = document.getElementById('btnLogin');
+    if (login && vis(login)) return 'login-page';
+    const msg = [...document.querySelectorAll('.k-window, .kd-messagebox, [role=dialog], [role=alertdialog]')].filter(vis)
+      .map((w) => w.innerText || '').find((s) => /在其他地方登录|在别处登录|被迫下线|会话已失效|会话已过期|登录超时|请重新登录/.test(s));
+    return msg ? 'kicked: ' + msg.replace(/\\s+/g, ' ').slice(0, 120) : 'ok';
+  })()`);
+  if (state !== 'ok') {
+    const error = new Error('K3Cloud session lost (' + state + '); stop and re-login before continuing');
+    error.code = 'K3_SESSION_LOST';
+    error.detail = state;
+    throw error;
+  }
+  return true;
+}
+
 // 网格状态：可见单号链接、是否“暂无数据”、是否在加载
 async function gridSignature(page, opts = {}) {
   const guard = guardOf(opts);
@@ -130,6 +149,7 @@ async function openListBySearch(page, job, opts = {}) {
   const query = job.query || job.q;
   const needle = job.needle || query;
   if (!query) throw new Error('openListBySearch requires job.query');
+  await assertSession(page);
   if (opts.closeTabsFirst !== false) await closeInnerTabs(page, opts);
 
   const searchOpen = await inPage(page, guard, () => {
@@ -207,7 +227,8 @@ async function openListBySearch(page, job, opts = {}) {
 async function ensureQuickFilterField(page, label = '单据编号', opts = {}) {
   const guard = guardOf(opts);
   const cur = await inPage(page, guard, (want) => {
-    const f = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => e.getBoundingClientRect().width > 20);
+    const onTop = (e) => { const r = e.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; const h = document.elementFromPoint(r.x + Math.min(r.width / 2, 20), r.y + r.height / 2); return !!h && (h === e || e.contains(h) || h.contains(e)); };
+    const f = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => onTop(e));
     if (!f) return null;
     if ((f.value || '').trim() === want) return want;
     const wrap = f.closest('.k-widget, .k-combobox, .k-dropdown');
@@ -216,19 +237,48 @@ async function ensureQuickFilterField(page, label = '单据编号', opts = {}) {
     return f.value || '';
   }, label);
   if (cur === null || cur === label) return { field: cur, switched: false };
-  await cdp.sleep(450);
-  const marked = await inPage(page, guard, (want) => {
+  const markItem = () => inPage(page, guard, (want) => {
     for (const el of document.querySelectorAll('[data-abb-qf-item]')) el.removeAttribute('data-abb-qf-item');
-    const item = [...document.querySelectorAll('li.k-item')].find((e) => {
-      const r = e.getBoundingClientRect();
-      return (e.innerText || '').trim() === want && r.width > 10 && r.height > 8;
+    const onTop = (e) => { const r = e.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; const h = document.elementFromPoint(r.x + Math.min(r.width / 2, 20), r.y + r.height / 2); return !!h && (h === e || e.contains(h) || h.contains(e)); };
+    const f = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => onTop(e));
+    const owns = f && f.getAttribute('aria-owns');
+    const root = (owns && document.getElementById(owns)) || document;
+    const item = [...root.querySelectorAll('li.k-item')].find((e) => {
+      if ((e.innerText || '').trim() !== want || e.getBoundingClientRect().width <= 10) return false;
+      e.scrollIntoView({ block: 'nearest' });
+      return onTop(e);
     });
     if (!item) return false;
     item.setAttribute('data-abb-qf-item', '1');
     return true;
   }, label);
+  let marked = false;
+  for (let attempt = 0; attempt < 2 && !marked; attempt++) {
+    if (attempt > 0) {
+      await inPage(page, guard, () => {
+        const onTop = (e) => { const r = e.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; const h = document.elementFromPoint(r.x + Math.min(r.width / 2, 20), r.y + r.height / 2); return !!h && (h === e || e.contains(h) || h.contains(e)); };
+        const f = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => onTop(e));
+        const sel = f && f.closest('.k-widget, .k-combobox, .k-dropdown') && f.closest('.k-widget, .k-combobox, .k-dropdown').querySelector('.k-select');
+        if (sel) sel.click();
+        return !!sel;
+      });
+    }
+    const until = Date.now() + 3000;
+    while (!(marked = await markItem()) && Date.now() < until) await cdp.sleep(200);
+  }
   if (!marked) throw new Error(`Quick filter field "${label}" not offered by this list`);
-  await cdp.clickByBox(page, '[data-abb-qf-item="1"]', guard, { parkPointer: true });
+  try {
+    await cdp.clickByBox(page, '[data-abb-qf-item="1"]', guard, { parkPointer: true });
+  } catch (err) {
+    // 下拉弹层偶尔部分渲染在可视区外（坐标为负），改为对同一个下拉项做 DOM 点击
+    if (!/not clickable|unavailable/i.test(String(err && err.message))) throw err;
+    await inPage(page, guard, () => { const e = document.querySelector('[data-abb-qf-item="1"]'); if (e) e.click(); return !!e; });
+  }
+  await cdp.waitFor(page, `(() => { const onTop = (e) => { const r = e.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; const h = document.elementFromPoint(r.x + Math.min(r.width / 2, 20), r.y + r.height / 2); return !!h && (h === e || e.contains(h) || h.contains(e)); }; const f = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => onTop(e)); return !!f && f.value.trim() === ${JSON.stringify(label)}; })()`, { timeoutMs: 5000 })
+    .catch(async () => {
+      const diag = await page.evalChecked(`(() => [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].map((e) => { const r = e.getBoundingClientRect(); return e.value + '@' + Math.round(r.x) + ',' + Math.round(r.y) + 'w' + Math.round(r.width); }).join(' | '))()`).catch(() => '');
+      throw new Error(`Quick filter field did not switch to "${label}" (fields: ${diag})`);
+    });
   await cdp.sleep(500);
   return { field: label, switched: true, from: cur };
 }
@@ -238,13 +288,14 @@ async function markQuickFilterValueInput(page, opts = {}) {
   const guard = guardOf(opts);
   return inPage(page, guard, () => {
     for (const el of document.querySelectorAll('[data-abb-qf-value]')) el.removeAttribute('data-abb-qf-value');
-    const field = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => e.getBoundingClientRect().width > 20);
+    const onTop = (e) => { const r = e.getBoundingClientRect(); if (r.width < 4 || r.height < 4) return false; const h = document.elementFromPoint(r.x + Math.min(r.width / 2, 20), r.y + r.height / 2); return !!h && (h === e || e.contains(h) || h.contains(e)); };
+    const field = [...document.querySelectorAll('input.kd-defaultQuikerRow-partFileds')].find((e) => onTop(e));
     if (!field) return false;
     const fr = field.getBoundingClientRect();
     let best = null;
     for (const el of document.querySelectorAll('input')) {
       const r = el.getBoundingClientRect();
-      if (el === field || r.width < 60 || el.disabled || el.readOnly) continue;
+      if (el === field || r.width < 60 || el.disabled || el.readOnly || !onTop(el)) continue;
       if (Math.abs(r.y - fr.y) > 6 || r.x <= fr.x + fr.width) continue;
       if (el.classList.contains('kd-defaultQuikerRow-partFileds')) continue;
       const d = r.x - fr.x;
@@ -259,6 +310,7 @@ async function markQuickFilterValueInput(page, opts = {}) {
 
 async function filterByBillNo(page, billNo, opts = {}) {
   const guard = guardOf(opts);
+  await assertSession(page);
   const runSearch = async () => {
     await ensureQuickFilterField(page, '单据编号', opts);
     const before = await gridSignature(page, opts);
@@ -279,8 +331,8 @@ async function filterByBillNo(page, billNo, opts = {}) {
   };
   let found = await runSearch();
   let reset = false;
-  if (!found) {
-    // 默认方案可能带日期条件，先“重置”再查一次（重置会把快捷过滤字段恢复为方案默认，runSearch 会再切回单据编号）
+  if (!found && opts.resetOnMiss) {
+    // 可选：默认方案带日期等条件时，先“重置”再查一次（会改动当前列表的过滤状态，所以默认不做）
     reset = await inPage(page, guard, () => {
       const btn = [...document.querySelectorAll('a,span')].find((e) => (e.innerText || '').trim() === '重置' && e.getBoundingClientRect().width > 10);
       if (btn) btn.click();
@@ -330,6 +382,7 @@ async function readBillState(page, opts = {}) {
 
 async function openBill(page, billNo, opts = {}) {
   const guard = guardOf(opts);
+  await assertSession(page);
   const before = await inPage(page, guard, () => document.querySelectorAll('li.contentHeadEL').length);
   // 同一单号在多行明细里会重复出现（每行一个链接），标记第一个可见的再点
   const markLink = () => inPage(page, guard, (bill) => {
@@ -396,16 +449,23 @@ async function openSerialView(page, opts = {}) {
     const busy = [...document.querySelectorAll('.k-window')].filter(vis).some((w) => /正在取数|查询进度/.test(w.innerText || ''));
     return !busy;
   })()`, { timeoutMs: opts.serialTimeoutMs || 30000 });
-  await cdp.sleep(500);
-  const total = await inPage(page, guard, () => {
-    const m = /共计[:：]\s*(\d+)\s*条记录/.exec(document.body.innerText || '');
-    return m ? Number(m[1]) : null;
-  });
+  let total = null;
+  const until = Date.now() + (opts.serialTotalTimeoutMs || 10000);
+  while (Date.now() < until) {
+    total = await inPage(page, guard, () => {
+      const m = /共计[:：]\s*(\d+)\s*条记录/.exec(document.body.innerText || '');
+      return m ? Number(m[1]) : null;
+    });
+    if (total !== null) break;
+    await cdp.sleep(300);
+  }
+  await cdp.sleep(300);
   return { opened: true, total };
 }
 
 module.exports = {
   K3_GUARD,
+  assertSession,
   waitLoadingGone,
   gridSignature,
   waitGridSettled,
