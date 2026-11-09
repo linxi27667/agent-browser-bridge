@@ -1,7 +1,7 @@
 {
   "site": "k3cloud",
   "title": "金蝶云星空 (Kingdee K3Cloud HTML5)",
-  "summary": "金蝶云星空 Web 端单据查询、动态网格提取与页签切换沉淀经验（严禁保存密码或自动执行未授权的提交/审核操作）",
+  "summary": "金蝶云星空 Web 端单据查询、动态网格提取与页签切换沉淀经验（只读；严禁保存密码或自动执行未授权的保存/提交/审核操作）",
   "domains": [
     "k3cloud",
     "/k3cloud/",
@@ -12,7 +12,7 @@
   "notes": [
     {
       "path": "notes/workflow.md",
-      "description": "金蝶云星空动态 ID 规避、语义定位器与表格数据读取规范"
+      "description": "金蝶云星空动态 ID 规避、菜单搜索、快捷过滤、单据打开模式、序列号查询与多 Agent 串行规范"
     }
   ],
   "tools": [
@@ -20,6 +20,11 @@
       "name": "inspect-grid",
       "description": "提取当前激活页签中的金蝶云星空单据列表表头与可见行数据（只读）",
       "entry": "tools/inspect-grid.cjs"
+    },
+    {
+      "name": "open-bill",
+      "description": "按菜单打开列表、按单据编号过滤并只读打开单据，可选打开序列号查询；修改模式的未审核单据读完自动关闭",
+      "entry": "tools/open-bill.cjs"
     }
   ]
 }

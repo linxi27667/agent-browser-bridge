@@ -5,7 +5,7 @@
   "private": true,
   "main": "lib/cdp/index.js",
   "scripts": {
-    "test": "node --test tests/core.test.cjs tests/reuse.test.cjs tests/auth.test.cjs tests/desktop.test.cjs tests/daemon.test.cjs tests/concurrency.test.cjs tests/egolite.test.cjs",
+    "test": "node --test tests/core.test.cjs tests/reuse.test.cjs tests/auth.test.cjs tests/desktop.test.cjs tests/daemon.test.cjs tests/concurrency.test.cjs tests/egolite.test.cjs tests/hardening.test.cjs",
     "check": "node cli/check.cjs",
     "smoke": "node cli/smoke.cjs",
     "serve": "node cli/serve.cjs",
