@@ -7,10 +7,12 @@ const { sleep } = require('../lib/cdp/client');
 const {
   resolveLockDir,
   isProcessAlive,
+  createFileLock,
   acquireTargetLease,
   withUiLock,
   activateTarget,
   withDedicatedTab,
+  withLeasedTarget,
 } = require('../lib/cdp/concurrency');
 
 const testLockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-browser-bridge-concurrency-'));
@@ -176,4 +178,137 @@ test('activateTarget requires valid targetId', async () => {
 
 test('withDedicatedTab requires callback function', async () => {
   await assert.rejects(withDedicatedTab({}), /callback/);
+});
+
+test('createFileLock ownership token prevents stale lock release from deleting active new lock', async () => {
+  const lockDir = resolveLockDir();
+  const lockPath = path.join(lockDir, 'test-token-lock.lock');
+
+  const oldLock = createFileLock(lockPath, { ttlMs: 100, ownerTag: 'old' });
+  assert.ok(oldLock);
+  await sleep(150);
+
+  const newLock = createFileLock(lockPath, { ttlMs: 60000, ownerTag: 'new' });
+  assert.ok(newLock);
+  assert.notEqual(oldLock.token, newLock.token);
+
+  assert.equal(oldLock.renew(), false);
+  oldLock.release();
+  assert.equal(fs.existsSync(lockPath), true);
+
+  newLock.release();
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
+test('withDedicatedTab preserves business http(s) tabs by default and reuses existing matching tab', async () => {
+  const closedTargets = [];
+  const createdTargets = [];
+  const fakeBrowser = {
+    send: async (method, params) => {
+      if (method === 'Target.getTargets') {
+        return {
+          targetInfos: [
+            { targetId: 'existing-k3-tab', type: 'page', title: 'K3Cloud', url: 'http://10.1.3.38/K3Cloud/html5/index.aspx' },
+          ],
+        };
+      }
+      if (method === 'Target.createTarget') {
+        createdTargets.push(params);
+        return { targetId: 'created-tab-1' };
+      }
+      if (method === 'Target.attachToTarget') {
+        return { sessionId: 'sess-k3-1' };
+      }
+      if (method === 'Target.activateTarget' || method === 'Target.detachFromTarget') {
+        return {};
+      }
+      if (method === 'Target.closeTarget') {
+        closedTargets.push(params.targetId);
+        return {};
+      }
+      return {};
+    },
+    close: () => {},
+    isDead: () => null,
+    on: () => () => {},
+    ready: Promise.resolve(),
+  };
+
+  let attachedTargetId = null;
+  let wasReused = false;
+  await withDedicatedTab(fakeBrowser, { port: 9224, url: 'http://10.1.3.38/K3Cloud' }, async (page, meta) => {
+    attachedTargetId = page.targetId;
+    wasReused = meta.reusedExisting;
+  });
+
+  assert.equal(attachedTargetId, 'existing-k3-tab');
+  assert.equal(wasReused, true);
+  assert.equal(createdTargets.length, 0, 'Should reuse existing K3 tab instead of creating duplicate tab');
+  assert.equal(closedTargets.length, 0, 'Should NEVER auto-close a business http(s) tab on exit');
+});
+
+test('withDedicatedTab protects the last remaining browser tab when closing about:blank', async () => {
+  const calls = [];
+  const fakeBrowser = {
+    send: async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'Target.createTarget') {
+        return { targetId: calls.filter((c) => c.method === 'Target.createTarget').length === 1 ? 'scratch-1' : 'guard-blank' };
+      }
+      if (method === 'Target.attachToTarget') {
+        return { sessionId: 'sess-scratch-1' };
+      }
+      if (method === 'Target.getTargets') {
+        return {
+          targetInfos: [{ targetId: 'scratch-1', type: 'page', title: 'blank', url: 'about:blank' }],
+        };
+      }
+      return {};
+    },
+    close: () => {},
+    isDead: () => null,
+    on: () => () => {},
+    ready: Promise.resolve(),
+  };
+
+  await withDedicatedTab(fakeBrowser, { port: 9224, url: 'about:blank' }, async () => {});
+
+  const createCalls = calls.filter((c) => c.method === 'Target.createTarget');
+  const closeCalls = calls.filter((c) => c.method === 'Target.closeTarget');
+  assert.equal(createCalls.length, 2, 'Should create replacement blank tab before closing the last tab');
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0].params.targetId, 'scratch-1');
+});
+
+test('withLeasedTarget attaches to existing tab by urlIncludes and never closes it', async () => {
+  const closedTargets = [];
+  const fakeBrowser = {
+    send: async (method, params) => {
+      if (method === 'Target.getTargets') {
+        return {
+          targetInfos: [
+            { targetId: 'k3-main-tab', type: 'page', title: '金蝶云星空', url: 'http://10.1.3.38/K3Cloud/html5/' },
+          ],
+        };
+      }
+      if (method === 'Target.attachToTarget') {
+        return { sessionId: 'sess-leased' };
+      }
+      if (method === 'Target.closeTarget') {
+        closedTargets.push(params.targetId);
+      }
+      return {};
+    },
+    close: () => {},
+    isDead: () => null,
+    on: () => () => {},
+    ready: Promise.resolve(),
+  };
+
+  let gotId = null;
+  await withLeasedTarget(fakeBrowser, { urlIncludes: '10.1.3.38' }, { port: 9224 }, async (page) => {
+    gotId = page.targetId;
+  });
+  assert.equal(gotId, 'k3-main-tab');
+  assert.equal(closedTargets.length, 0);
 });
