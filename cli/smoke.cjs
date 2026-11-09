@@ -84,7 +84,46 @@ const cdp = require('../lib/cdp');
     assert.equal(t1.out, 'out-任务A-20261107');
     assert.equal(t2.out, 'out-任务B-20261107');
 
-    console.log(JSON.stringify({ ok: true, version: cdp.version, fixture: 'isolated about:blank', checks: ['exact-target', 'selector-wait', 'native-Chinese-input', 'native-click-readback', 'box-click-readback', 'captcha-image-capture', 'user-auth-wait', 'page-exception-rejected', 'wrong-context-rejected', 'box-drag-readback', 'select-option-readback', 'enter-tab-escape', 'dedicated-tab-lease', 'concurrent-dual-task'], businessWrites: 0 }));
+    // 混合语义快照 (@ref) + 语义定位器 (role:/text=/:text-is) + 增量快照对比 (diffSnapshots)
+    await page.send('Page.setDocumentContent', {
+      frameId: tree.frameTree.frame.id,
+      html: [
+        '<title>AgentBrowserBridge-isolated-smoke</title>',
+        '<h1>全量发票查询</h1>',
+        '<input id="kw" placeholder="发票号码">',
+        '<div class="t-select-option" style="cursor:pointer;width:100px;height:28px" onclick="document.querySelector(\'#sem-out\').textContent=\'opt:数电票\'">数电票</div>',
+        '<label class="t-checkbox" style="display:inline-block;width:110px;height:28px;cursor:pointer"><input type="checkbox" id="hid-chk" style="width:0;height:0;opacity:0">包含红冲</label>',
+        '<button id="q-btn" onclick="document.querySelector(\'#sem-out\').textContent=\'query:\'+document.querySelector(\'#kw\').value">查询</button>',
+        '<output id="sem-out">init</output>',
+      ].join(''),
+    });
+    const snapBefore = await cdp.snapshot(page, guard);
+    assert.ok(snapBefore.text.includes('全量发票查询'));
+    const kwRef = snapBefore.refs.find(r => r.role === 'textbox');
+    assert.ok(kwRef, 'textbox ref should be extracted');
+    await cdp.fillNative(page, '@' + kwRef.refId, '26442000', guard);
+    await cdp.clickByBox(page, '.t-select-option:text-is("数电票")', guard);
+    assert.equal(await cdp.readUnique(page, '#sem-out', guard), 'opt:数电票');
+    await cdp.clickByBox(page, 'role:button[name="查询"]', guard);
+    assert.equal(await cdp.readUnique(page, '#sem-out', guard), 'query:26442000');
+    const snapAfter = await cdp.snapshot(page, guard);
+    const snapDiff = cdp.diffSnapshots(snapBefore, snapAfter);
+    assert.equal(snapDiff.changed, true);
+
+    // 底部毛玻璃进度提示 HUD + 点击水波纹（不污染快照）+ 弹窗防卡死拦截器 + 可观测诊断 + DOM 静止等待
+    await cdp.enableDialogGuard(page);
+    await cdp.enableObserve(page);
+    await page.evalChecked('window.alert("smoke-dialog-ok"); console.error("smoke-console-err"); true');
+    const diag = cdp.readDiagnostics(page);
+    assert.equal(diag.dialogs.length, 1);
+    assert.equal(diag.dialogs[0].message, 'smoke-dialog-ok');
+    assert.ok(diag.console.some(c => c.text.includes('smoke-console-err')));
+    const settled = await cdp.waitForDomSettled(page, guard, { quietMs: 60, timeoutMs: 1000 });
+    assert.equal(settled.settled, true);
+    const hasHudHost = await page.evalChecked('Boolean(document.getElementById("__abb_hud_host"))');
+    assert.equal(hasHudHost, true);
+
+    console.log(JSON.stringify({ ok: true, version: cdp.version, fixture: 'isolated about:blank', checks: ['exact-target', 'selector-wait', 'native-Chinese-input', 'native-click-readback', 'box-click-readback', 'captcha-image-capture', 'user-auth-wait', 'page-exception-rejected', 'wrong-context-rejected', 'box-drag-readback', 'select-option-readback', 'enter-tab-escape', 'dedicated-tab-lease', 'concurrent-dual-task', 'hybrid-snapshot-refs', 'semantic-locators', 'snapshot-diff', 'hud-ripple-progress', 'dialog-guard', 'observe-diagnostics', 'dom-settled-wait'], businessWrites: 0 }));
   } finally {
     if (page) page.close();
     if (target) await browser.send('Target.closeTarget', { targetId: target.targetId }).catch(() => {});

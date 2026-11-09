@@ -1,0 +1,24 @@
+{
+  "site": "etax-gd",
+  "title": "电子税务局全量发票查询 (广东税务 TDesign 系统)",
+  "summary": "电子税务局税务数字账户 -> 全量发票查询（开具发票/取得发票）的 TDesign 下拉选择、分页导出与发票表格解析工具集",
+  "domains": [
+    "etax.guangdong.chinatax.gov.cn",
+    "dppt.guangdong.chinatax.gov.cn",
+    "chinatax.gov.cn"
+  ],
+  "defaultGuard": "location.hostname.endsWith('.chinatax.gov.cn')",
+  "notes": [
+    {
+      "path": "notes/invoice-query.md",
+      "description": "电子税务局 TDesign 组件定位、语义选择器与全量发票查询注意事项"
+    }
+  ],
+  "tools": [
+    {
+      "name": "parse-invoices",
+      "description": "从当前全量发票查询页面提取表格行并规整为标准发票结构（只读）",
+      "entry": "tools/parse-invoices.cjs"
+    }
+  ]
+}

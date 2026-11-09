@@ -96,7 +96,7 @@ $arguments = @(
     '--remote-debugging-address=127.0.0.1',
     "--remote-debugging-port=$Port",
     '--remote-allow-origins=http://agent-browser-bridge.invalid',
-    ('--user-data-dir=' + $quote + $ProfileRoot + $quote),
+    "--user-data-dir=$ProfileRoot",
     '--no-first-run',
     '--no-default-browser-check',
     # 多任务后台标签不被 Chromium 节流，避免截图/坐标超时
@@ -104,7 +104,7 @@ $arguments = @(
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding'
 )
-if ($Url) { $arguments += ($quote + $Url + $quote) }
+if ($Url) { $arguments += $Url }
 
 $process = Start-Process -FilePath $ExecutablePath -ArgumentList $arguments -PassThru
 $endpoint = "http://127.0.0.1:$Port"

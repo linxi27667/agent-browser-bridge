@@ -1,0 +1,25 @@
+{
+  "site": "k3cloud",
+  "title": "金蝶云星空 (Kingdee K3Cloud HTML5)",
+  "summary": "金蝶云星空 Web 端单据查询、动态网格提取与页签切换沉淀经验（严禁保存密码或自动执行未授权的提交/审核操作）",
+  "domains": [
+    "k3cloud",
+    "/k3cloud/",
+    "kdsvc.com",
+    "ik3cloud.com"
+  ],
+  "defaultGuard": "location.href.toLowerCase().includes('k3cloud')",
+  "notes": [
+    {
+      "path": "notes/workflow.md",
+      "description": "金蝶云星空动态 ID 规避、语义定位器与表格数据读取规范"
+    }
+  ],
+  "tools": [
+    {
+      "name": "inspect-grid",
+      "description": "提取当前激活页签中的金蝶云星空单据列表表头与可见行数据（只读）",
+      "entry": "tools/inspect-grid.cjs"
+    }
+  ]
+}

@@ -1,10 +1,36 @@
 # Agent Browser Bridge
 
-A small local bridge that lets Codex / Cursor agents connect to a dedicated Microsoft Edge or Google Chrome debug window.
+A small local bridge that lets Codex / Cursor / Antigravity agents connect to a dedicated Microsoft Edge or Google Chrome debug window.
 
 It supports Edge and Chrome on Windows through the same Chromium DevTools Protocol. Default to a dedicated profile with `--remote-debugging-port`; that path does not show the Edge Allow prompt. Each connection is checked against its local debug port, browser type, profile folder, and proxy setting before page access.
 
-## Multi-agent concurrency (0.6.0)
+## Hybrid AX/DOM Snapshot, Semantic Locators & Code-First Runner (0.7.0)
+
+v0.7.0 integrates the open-source capabilities of `vercel-labs/agent-browser` (hybrid ARIA + cursor-interactive DOM snapshot, hidden radio/checkbox promotion, durable `@e1` refs, LCS `diffSnapshots`) and `citrolabs/ego-lite` (semantic locators, actionability hit-test, code-first runner with `page-context-guard`, and structured site `learnings/`), while keeping 100% of AgentBrowserBridge's security invariants (`guardExpression` + dedicated profile verification):
+
+| Capability | API / Syntax | Description |
+| --- | --- | --- |
+| Hybrid Snapshot | `snapshot(page, guard, opts)` / `snapshotText(page, guard, opts)` | Extracts ARIA roles + custom `cursor:pointer` / `onclick` / `tabindex` elements + promotes hidden radio/checkboxes into `@e1`, `@e2` refs |
+| Snapshot Diff | `diffSnapshots(before, after)` | Line-level LCS diff returning only `{ changed, additions, removals, diff }` after an action |
+| Ref & Semantic Locators | `@e1`, `role:button[name="查询"]`, `text="数电票"`, `.t-select-option:text-is("取得发票")`, `button:has-text("导出") >> nth=0` | Supported across `waitForSelector`, `fillNative`, `clickNative`, `clickByBox`, `dragByBox`, `selectOption`, `readUnique`, `captureUniquePng` |
+| Code-First Runner | `npm run exec -- --code "..."` / `cdp.runScript(code)` | Executes multi-step automation in one turn and intercepts accidental `document`/`window`/`location` calls in Node |
+| Site Learnings | `loadSiteLearning(url)` / `runSiteTool(site, tool, args, ctx)` | Reusable domain knowledge and read-only tools under `learnings/` (`k3cloud`, `etax-gd`) |
+
+Example (Observe -> Act by `@ref` or semantic locator -> Diff):
+
+```js
+const cdp = require('./lib/cdp');
+await cdp.withDedicatedTab({ url: 'https://example.com', ownerTag: 'agent-A' }, async (page) => {
+  const guard = 'location.hostname === "example.com"';
+  const before = await cdp.snapshot(page, guard, { interactiveOnly: true });
+  await cdp.fillNative(page, '@e1', '26442000', guard);
+  await cdp.clickByBox(page, 'role:button[name="查询"]', guard, { checkIntercept: true });
+  const after = await cdp.snapshot(page, guard, { interactiveOnly: true });
+  console.log(cdp.diffSnapshots(before, after).diff);
+});
+```
+
+## Multi-agent concurrency (0.6.0+)
 
 When several agents share one debug browser, they used to fight over the same tab and foreground focus. This release merges GcWebAuto’s serverless lock model:
 
@@ -59,7 +85,7 @@ The launcher prints the local CDP address. Set the same values before using the 
 
 For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BRIDGE_EXPECT_BROWSER.
 
-check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, user-auth wait, dedicated-tab lease, and concurrent dual-task isolation. `npm test` also covers concurrency unit tests and clicks an isolated local desktop dialog through UI Automation.
+check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, user-auth wait, dedicated-tab lease, concurrent dual-task isolation, hybrid `@ref` snapshot, semantic locators (`role:`, `:text-is()`), and `diffSnapshots`. `npm test` also covers concurrency, locator/snapshot/runner/learnings unit tests, and clicks an isolated local desktop dialog through UI Automation.
 
 Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the dedicated window after check/smoke.
 

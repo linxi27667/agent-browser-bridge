@@ -35,6 +35,7 @@ public static class NamedWindowNative {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 }
 "@
 
@@ -137,7 +138,18 @@ $height = [Math]::Max(1, [int][Math]::Round($rect.Height))
 $bmp = New-Object System.Drawing.Bitmap $width, $height
 $graphics = [System.Drawing.Graphics]::FromImage($bmp)
 try {
-    $graphics.CopyFromScreen([int][Math]::Round($rect.X), [int][Math]::Round($rect.Y), 0, 0, $bmp.Size)
+    try {
+        $graphics.CopyFromScreen([int][Math]::Round($rect.X), [int][Math]::Round($rect.Y), 0, 0, $bmp.Size)
+    } catch {
+        $hdc = $graphics.GetHdc()
+        try {
+            if (-not [NamedWindowNative]::PrintWindow([IntPtr]$hwnd, $hdc, 2)) {
+                [void][NamedWindowNative]::PrintWindow([IntPtr]$hwnd, $hdc, 0)
+            }
+        } finally {
+            $graphics.ReleaseHdc($hdc)
+        }
+    }
     $dir = Split-Path -Parent $OutputPath
     if ($dir) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $bmp.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
