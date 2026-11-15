@@ -108,3 +108,13 @@ module.exports = async function ({ desktop, scenes, step }) {
   );
 };
 ```
+
+## 6. Native MCP Server Mode (`cli/mcp.cjs` — Stdio & Streamable HTTP)
+
+When running inside an IDE or desktop host whose shell runner isolates child processes from `WinSta0\Default`, expose desktop automation through Antigravity's official MCP server (`node cli/mcp.cjs`):
+
+- **Stdio MCP** (`~/.gemini/config/mcp_config.json`): `node cli/mcp.cjs --print-config --write`
+- **Local Streamable HTTP MCP** (when the host also isolates stdio MCP processes, run once in the user's `WinSta0\Default` session):
+  - Start server: `node cli/mcp.cjs --http --port 19235 --write` (loopback `127.0.0.1` only, rejects browser `Origin` headers, requires `Authorization: Bearer <token>`)
+  - Generate config snippet: `node cli/mcp.cjs --print-config --http --port 19235 --write`
+- **MCP Tool Rule**: If `desktop_*` MCP tools (`desktop_doctor`, `desktop_open_app`, `desktop_ocr`, `desktop_chat_send`, etc.) are available in the agent toolset, call `desktop_doctor` first and prefer the MCP tools over isolated shell commands.
