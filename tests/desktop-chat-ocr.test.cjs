@@ -556,6 +556,8 @@ function createTestDesktopAdapter(realDesktop, simExe, isInteractiveDesktop) {
         } else if (s.command === 'press') {
           execFileSync(simExe, ['--dispatch-combo', parseHwnd(s.windowId ?? call.windowId), s.combo ?? s.key], { windowsHide: true });
           results.push({ index: i, command: 'press', execution: 'completed', ok: true, data: {} });
+        } else if (s.command === 'mouse-wheel') {
+          results.push({ index: i, command: 'mouse-wheel', execution: 'completed', ok: true, data: {} });
         } else {
           throw new Error(`Unexpected step command in test adapter: ${s.command}`);
         }
@@ -878,5 +880,228 @@ test('ensureWindowReady runs Win32 work-area clamp even when already focused and
     assert.deepEqual(ready.bounds, { x: 0, y: 424, width: 986, height: 736 });
   } finally {
     winHelper.assistForegroundWindow = origAssist;
+  }
+});
+
+test('win-helper-v3 detectChatLayout detects split-pane + open right drawer and compact OCR cuts payload >80%', { skip: process.platform !== 'win32' }, async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-layout-v3-'));
+  const imgDrawer = path.join(tmpDir, 'chat-with-drawer.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Add-Type -AssemblyName System.Drawing;
+       $b = New-Object System.Drawing.Bitmap(960, 680);
+       $g = [System.Drawing.Graphics]::FromImage($b);
+       $g.Clear([System.Drawing.Color]::FromArgb(245, 246, 248));
+       $railBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(46, 54, 72));
+       $g.FillRectangle($railBrush, 0, 0, 56, 680);
+       $chatBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(242, 243, 245));
+       $g.FillRectangle($chatBrush, 285, 0, 415, 440);
+       $compBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White);
+       $g.FillRectangle($compBrush, 285, 440, 415, 240);
+       $drawerBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(250, 250, 252));
+       $g.FillRectangle($drawerBrush, 700, 0, 260, 680);
+       $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(220, 224, 230), 1);
+       $g.DrawLine($pen, 285, 0, 285, 680);
+       $g.DrawLine($pen, 700, 0, 700, 680);
+       $g.DrawLine($pen, 285, 440, 700, 440);
+       $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit;
+       $font = New-Object System.Drawing.Font('Microsoft YaHei', 14, [System.Drawing.FontStyle]::Regular);
+       $txtBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(30, 35, 45));
+       $rowPrefix = -join ([char[]](0x4f01,0x4e1a,0x5fae,0x4fe1,0x4f1a,0x8bdd,0x5217,0x8868,0x6d4b,0x8bd5,0x6761,0x76ee));
+       $targetLabel = -join ([char[]](0x6587,0x4ef6,0x4f20,0x8f93,0x52a9,0x624b));
+       for ($i = 0; $i -lt 8; $i++) {
+         $g.DrawString(($rowPrefix + $i + ' 10:3' + $i), $font, $txtBrush, 68, (80 + $i * 52));
+       }
+       $g.DrawString($targetLabel, $font, $txtBrush, 68, 520);
+       $pen.Dispose(); $font.Dispose(); $txtBrush.Dispose();
+       $railBrush.Dispose(); $chatBrush.Dispose(); $compBrush.Dispose(); $drawerBrush.Dispose();
+       $g.Dispose();
+       $b.Save('${imgDrawer.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png);
+       $b.Dispose();`,
+    ], { windowsHide: true });
+
+    const layout = await winHelper.detectChatLayout(imgDrawer);
+    assert.equal(layout.detected, true);
+    assert.ok(Math.abs(layout.sidebarRightX - 285) <= 3, `Expected sidebarRightX ~285, got ${layout.sidebarRightX}`);
+    assert.ok(Math.abs(layout.rightDrawerLeftX - 700) <= 3, `Expected rightDrawerLeftX ~700, got ${layout.rightDrawerLeftX}`);
+    assert.ok(Math.abs(layout.composerTopY - 440) <= 3, `Expected composerTopY ~440, got ${layout.composerTopY}`);
+    // True composer center X must sit inside [285..700] (~492px -> ratio ~0.51), NEVER inside the right drawer (>0.72)!
+    assert.ok(layout.composerRatio.xRatio > 0.45 && layout.composerRatio.xRatio < 0.58, `Expected composerRatio.xRatio inside central pane, got ${layout.composerRatio.xRatio}`);
+
+    const bounds = { x: 100, y: 50, width: 960, height: 680 };
+    const verboseOcr = await winHelper.ocrImage(imgDrawer, { region: 'sidebar', find: '文件传输助手', bounds, includeWords: true });
+    const compactOcr = await winHelper.ocrImage(imgDrawer, { region: 'sidebar', find: '文件传输助手', bounds, includeWords: false, includeLines: false });
+    assert.equal(verboseOcr.matches.length, 1);
+    assert.equal(compactOcr.matches.length, 1);
+    assert.deepEqual(compactOcr.matches[0].screen, verboseOcr.matches[0].screen, 'Sub-line word match coordinates must be identical');
+    const verboseBytes = Buffer.byteLength(JSON.stringify(verboseOcr), 'utf8');
+    const compactBytes = Buffer.byteLength(JSON.stringify(compactOcr), 'utf8');
+    assert.ok(compactBytes < verboseBytes * 0.25, `Expected >75% byte savings: compact=${compactBytes}B vs verbose=${verboseBytes}B`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('deliverChatSessionVerified supports sidebar wheel-scroll fallback, clickTextVerified scrollRetries, and stuck-composer diagnostic', { skip: process.platform !== 'win32' }, async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-scroll-diag-'));
+  const imgInitial = path.join(tmpDir, 'initial.png');
+  const imgScrolled = path.join(tmpDir, 'scrolled.png');
+  const imgComposerStuck = path.join(tmpDir, 'composer-stuck.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Add-Type -AssemblyName System.Drawing;
+       function New-ChatPng([string]$p, [bool]$scrolled, [bool]$compDirty) {
+         $b = New-Object System.Drawing.Bitmap(480, 360);
+         $g = [System.Drawing.Graphics]::FromImage($b);
+         $g.Clear([System.Drawing.Color]::White);
+         $sb = New-Object System.Drawing.SolidBrush($(if ($scrolled) { [System.Drawing.Color]::Navy } else { [System.Drawing.Color]::Silver }));
+         $g.FillRectangle($sb, 12, 120, 80, 40);
+         if ($compDirty) {
+           $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::DarkGreen);
+           $g.FillRectangle($cb, 220, 280, 120, 36);
+           $cb.Dispose();
+         }
+         $sb.Dispose(); $g.Dispose();
+         $b.Save($p, [System.Drawing.Imaging.ImageFormat]::Png);
+         $b.Dispose();
+       }
+       New-ChatPng '${imgInitial.replace(/'/g, "''")}' $false $false;
+       New-ChatPng '${imgScrolled.replace(/'/g, "''")}' $true $false;
+       New-ChatPng '${imgComposerStuck.replace(/'/g, "''")}' $true $true;`,
+    ], { windowsHide: true });
+
+    const origOcr = winHelper.ocrImage;
+    const origAssist = winHelper.assistForegroundWindow;
+    let wheelCount = 0;
+    let navigated = false;
+    const mockWin = {
+      id: 'w-88801',
+      pid: 22222,
+      app_name: 'WXWork',
+      title: '企业微信',
+      is_focused: true,
+      minimized: false,
+      bounds: { x: 0, y: 0, width: 480, height: 360 },
+    };
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-88801',
+        window: mockWin,
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds: mockWin.bounds,
+      }),
+      adListWindows: async () => [mockWin],
+      adFocusWindow: async () => ({ ok: true }),
+      adClipboardClear: async () => ({ ok: true }),
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInitial, outPath);
+        return { path: outPath };
+      },
+      adMouseWheel: async () => {
+        wheelCount += 1;
+        return { ok: true };
+      },
+      adMouseClick: async () => ({ ok: true }),
+      adWait: async () => ({ ok: true }),
+      adOcrWindow: async (_app, call) => ({
+        windowId: 'w-88801',
+        matches: wheelCount >= 2 && call.find === '底部历史群'
+          ? [{ matchedText: '底部历史群', lineText: '底部历史群', confidence: 'exact', screen: { center: { x: 80, y: 200 } } }]
+          : [],
+      }),
+      adBatch: async (steps) => {
+        if (steps.some(s => s.command === 'mouse-wheel')) wheelCount += 1;
+        if (steps.some(s => s.command === 'mouse-click' && s.x === 80 && s.y === 200)) navigated = true;
+        const isDeliveryBatch = steps.some(s => s.command === 'clipboard-set');
+        let shotIdx = 0;
+        const results = steps.map(step => {
+          if (step.command === 'screenshot' && step.outputPath) {
+            shotIdx += 1;
+            const src = isDeliveryBatch
+              ? (shotIdx === 1 ? imgScrolled : imgComposerStuck)
+              : (wheelCount > 0 ? imgScrolled : imgInitial);
+            fs.copyFileSync(src, step.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 10, transport: 'native-batch-stdin' };
+      },
+    };
+
+    winHelper.assistForegroundWindow = async () => ({
+      ok: true,
+      focused: true,
+      isInteractiveDefaultDesktop: true,
+      clampedToWorkArea: false,
+    });
+    winHelper.ocrImage = async (shotPath, opts = {}) => {
+      const base = path.basename(shotPath);
+      if (String(opts.region || '').includes('header')) {
+        return {
+          imageWidth: 480,
+          imageHeight: 360,
+          text: navigated ? '底部历史群' : '默认群',
+          lines: [{ text: navigated ? '底部历史群' : '默认群' }],
+          matches: navigated && opts.find === '底部历史群'
+            ? [{ lineText: '底部历史群', matchedText: '底部历史群', screen: { center: { x: 240, y: 24 } }, imageRect: { x: 200, y: 12, width: 80, height: 20 } }]
+            : [],
+        };
+      }
+      const hasTargetInSidebar = base.includes('scroll-1');
+      return {
+        imageWidth: 480,
+        imageHeight: 360,
+        text: hasTargetInSidebar ? '底部历史群' : '顶部群',
+        lines: [{ text: hasTargetInSidebar ? '底部历史群' : '顶部群' }],
+        matches: hasTargetInSidebar && opts.find === '底部历史群'
+          ? [{ lineText: '底部历史群', matchedText: '底部历史群', confidence: 'exact', imageRect: { x: 40, y: 180, width: 80, height: 20 }, screen: { center: { x: 80, y: 200 } } }]
+          : [],
+      };
+    };
+
+    try {
+      // 1. Test sidebar wheel-scroll fallback + stuck-composer diagnostic (messages unchanged, composer changed!)
+      await assert.rejects(
+        deliverChatSessionVerified(mockDesktop, {
+          app: 'wecom',
+          windowId: 'w-88801',
+          session: '底部历史群',
+          allowSearch: false,
+          sidebarScrollPages: 2,
+          autoDetectLayout: false,
+          items: ['unsent-enter-test'],
+        }),
+        err => err?.code === 'VISUAL_STATE_UNCHANGED'
+          && err?.details?.composerChanged === true
+          && err?.details?.suggestedSubmitKey === 'ctrl+return'
+          && /ctrl\+return/i.test(err.message),
+      );
+      assert.equal(navigated, true, 'Sidebar scroll fallback should have located and clicked 底部历史群');
+
+      // 2. Test clickTextVerified scrollRetries
+      wheelCount = 0;
+      const clickRes = await clickTextVerified(mockDesktop, {
+        app: 'wecom',
+        windowId: 'w-88801',
+        text: '底部历史群',
+        region: 'sidebar',
+        scrollRetries: 3,
+        scrollSettleMs: 10,
+      });
+      assert.equal(clickRes.ok, true);
+      assert.equal(clickRes.scrolledAttempts, 2);
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

@@ -20,18 +20,18 @@ Always drive Windows desktop tasks through `node cli/agent.cjs` (or `require('./
 
 ## 2. Routing: Native UIA vs Custom-Drawn Visual Apps
 
-1. Inspect target capabilities once:
+1. Inspect target capabilities once (compact ~450B summary without raw UIA tree bloat):
    ```powershell
-   node cli/agent.cjs desktop capabilities --app notepad.exe
-   node cli/agent.cjs desktop capabilities --app WXWork.exe
+   node cli/agent.cjs desktop capabilities --app notepad.exe --no-snapshot
+   node cli/agent.cjs desktop capabilities --app WXWork.exe --no-snapshot
    ```
 2. Follow the observed capability mode immediately:
    - **`uia_semantic`** (Win32 / WPF / WinForms / standard Electron with UIA):
-     - Stay in cooperative mode (`--write` without `--mode exclusive`) whenever possible.
-     - Use snapshot-qualified refs (`'@s8f3k2p9:e1'`, always single-quoted in PowerShell) with `adSetValue`, `adClick`, `adGet`, or `desktop deliver --stdin`.
+     - Stay in cooperative mode (`--write` without `--mode exclusive`) whenever possible — zero focus steal!
+     - Use snapshot-qualified refs (`'@s8f3k2p9:e1'`, always single-quoted in PowerShell) with `click`, `set-value`, `clear`, `select`, `toggle`, `check`, `uncheck`, `expand`, `collapse`, `scroll`, `scroll-to`, `get`, `is`, `desktop deliver --stdin`, or `desktop batch --stdin` (or MCP `desktop_snapshot` + `desktop_query` + `desktop_act`). Note: Windows UIA `focus` (`SetFocus`) moves foreground focus and requires `exclusive` mode; classic Win32/WinForms `DropDownList` `combobox` controls expose `SetValue` rather than `SelectionItem` (`adSelect` and single-step `desktop_act` `select` auto-fallback to `set-value`, while multi-step `steps[]` batches should pass `{ "command": "set-value", "ref": "@...", "value": "..." }` when `availableActions` lists `SetValue` without `Select`; budget `timeoutMs >= writeSteps * 2500 + 5000` for large batches).
    - **`custom_ui_visual`** (WeCom `WXWork.exe`, WeChat `Weixin.exe`/`WeChat.exe`, QQ, DirectUI/Qt/CEF canvases with zero client UIA controls):
      - Do **NOT** poll `find` or `snapshot` repeatedly looking for nonexistent controls.
-     - Switch immediately to `--write --mode exclusive` + background WinRT OCR (`desktop ocr`, `desktop click-text`) + `desktop chat-send --stdin` or `desktop batch --stdin`.
+     - Switch immediately to `--write --mode exclusive` + background WinRT OCR (`desktop ocr`, `desktop click-text`) + `desktop chat-send --stdin` (auto-detects split-pane & open right-side drawer via `win-helper-v3` `chat-layout`) or `desktop batch --stdin`.
 
 ## 3. Standard Commands (`node cli/agent.cjs desktop ...`)
 
@@ -109,7 +109,7 @@ module.exports = async function ({ desktop, scenes, step }) {
 };
 ```
 
-## 6. Native MCP Server Mode (`cli/mcp.cjs` — Stdio & Streamable HTTP)
+## 6. Native MCP Server Mode (`cli/mcp.cjs` — 14 Token-Efficient Tools + Hot-Reload)
 
 When running inside an IDE or desktop host whose shell runner isolates child processes from `WinSta0\Default`, expose desktop automation through Antigravity's official MCP server (`node cli/mcp.cjs`):
 
@@ -117,4 +117,9 @@ When running inside an IDE or desktop host whose shell runner isolates child pro
 - **Local Streamable HTTP MCP** (when the host also isolates stdio MCP processes, run once in the user's `WinSta0\Default` session):
   - Start server: `node cli/mcp.cjs --http --port 19235 --write` (loopback `127.0.0.1` only, rejects browser `Origin` headers, requires `Authorization: Bearer <token>`)
   - Generate config snippet: `node cli/mcp.cjs --print-config --http --port 19235 --write`
-- **MCP Tool Rule**: If `desktop_*` MCP tools (`desktop_doctor`, `desktop_open_app`, `desktop_ocr`, `desktop_chat_send`, etc.) are available in the agent toolset, call `desktop_doctor` first and prefer the MCP tools over isolated shell commands.
+- **14 Exposed MCP Tools**:
+  - Discovery & Diagnostics: `desktop_doctor` (includes `helperVersion` + `mcpRuntime.reloadCount`), `desktop_apps`, `desktop_windows`, `desktop_capabilities` (compact by default), `desktop_open_app`, `desktop_ensure_ready`.
+  - Universal Standard UIA: `desktop_snapshot` (with `maxNodes` cap), `desktop_query` (`find | get | is | displays | surfaces`), `desktop_act` (single command or 1-process `steps[]` batch; auto-runs pure UIA in `cooperative` mode and foreground/window commands in `exclusive` mode), `desktop_deliver`.
+  - Custom-Drawn & IM Apps: `desktop_ocr` (compact token-saving output by default, ~90% smaller), `desktop_shot`, `desktop_click_text` (with `scrollRetries`), `desktop_chat_send` (with `win-helper-v3` adaptive split-pane/drawer layout, `sidebarScrollPages`, and `submitKey` diagnostics).
+- **Auto Hot-Reload**: Modifying `lib/desktop/*.js` or `lib/automation/*.js` automatically reloads cached modules on the next idle MCP tool call without restarting the IDE.
+- **MCP Tool Rule**: If `desktop_*` MCP tools are available in the agent toolset, call `desktop_doctor` first and prefer the MCP tools over isolated shell commands.

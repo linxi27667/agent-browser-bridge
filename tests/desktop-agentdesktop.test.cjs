@@ -172,3 +172,147 @@ test('window restoration requires an explicit target and writable exclusive mode
   await assert.rejects(desktop.adRestoreWindow(),isCode('INVALID_ARGS'));
   assert.equal((await desktop.adRestoreWindow(undefined,{windowId:'w-123'})).command,'restore');
 });
+
+test('unlocked UIA queries and cooperative semantic actions preserve policy and argument contracts', async () => {
+  const reader = client();
+  assert.equal((await reader.adListDisplays()).command, 'list-displays');
+  assert.equal((await reader.adListSurfaces('fixture.exe')).command, 'list-surfaces');
+  const isRes = await reader.adIs(ref, 'checked');
+  assert.equal(isRes.command, 'is');
+  assert.ok(isRes.args.includes('--property=checked'));
+  await assert.rejects(reader.adIs(ref, 'bogus'), isCode('INVALID_ARGS'));
+
+  const findRes = await reader.adFind('fixture.exe', {
+    role: 'button',
+    text: 'Submit',
+    nativeId: 'btnSubmit',
+    states: ['enabled', 'focusable'],
+    exact: true,
+    first: true,
+    limit: 5,
+  });
+  assert.ok(findRes.args.includes('--native-id=btnSubmit'));
+  assert.ok(findRes.args.includes('--state=enabled'));
+  assert.ok(findRes.args.includes('--state=focusable'));
+  assert.ok(findRes.args.includes('--exact'));
+  assert.ok(findRes.args.includes('--first'));
+  assert.ok(findRes.args.includes('--limit=5'));
+
+  assert.equal((await reader.adWait(120)).command, 'wait');
+  assert.equal((await reader.adWait({ text: 'Ready', app: 'fixture.exe', timeout: 2000 })).command, 'wait');
+
+  // Read-only blocks cooperative semantic mutations
+  for (const op of [
+    () => reader.adSelect(ref, 'Option A'),
+    () => reader.adCheck(ref),
+    () => reader.adUncheck(ref),
+    () => reader.adToggle(ref),
+    () => reader.adExpand(ref),
+    () => reader.adCollapse(ref),
+    () => reader.adClear(ref),
+    () => reader.adFocus(ref),
+    () => reader.adScroll(ref, { direction: 'down', amount: 3 }),
+    () => reader.adScrollTo(ref),
+  ]) await assert.rejects(op(), isCode('READ_ONLY_BLOCKED'));
+
+  // Writable cooperative allows all background UIA pattern mutations without --headed
+  const coop = client({ readOnly: false, mode: 'cooperative' });
+  const sel = await coop.adSelect(ref, 'Option A');
+  assert.deepEqual(sel.args, ['select', ref, 'Option A']);
+  // Win32/WinForms DropDownList fallback: select ACTION_NOT_SUPPORTED -> set-value --stdin
+  const fallbackSel = await client({ readOnly: false, mode: 'cooperative' }, 'select-unsupported').adSelect(ref, 'Urgent');
+  assert.equal(fallbackSel.command, 'set-value');
+  assert.equal(fallbackSel.fallback, 'set-value');
+  assert.equal(fallbackSel.stdin, 'Urgent');
+
+  assert.equal((await coop.adCheck(ref)).command, 'check');
+  assert.equal((await coop.adUncheck(ref)).command, 'uncheck');
+  assert.equal((await coop.adToggle(ref)).command, 'toggle');
+  assert.equal((await coop.adExpand(ref)).command, 'expand');
+  assert.equal((await coop.adCollapse(ref)).command, 'collapse');
+  assert.equal((await coop.adClear(ref)).command, 'clear');
+  // Windows SetFocus moves foreground window -> requires exclusive mode + --headed
+  await assert.rejects(coop.adFocus(ref), isCode('DESKTOP_FOREGROUND_REQUIRED'));
+  const scr = await coop.adScroll(ref, { direction: 'down', amount: 4 });
+  assert.deepEqual(scr.args, ['scroll', ref, '--direction=down', '--amount=4']);
+  assert.equal((await coop.adScrollTo(ref)).command, 'scroll-to');
+
+  // Read-only blocks file-writing screenshot/clipboard-get while allowing base64/memory reads
+  assert.ok((await reader.adScreenshot('fixture.exe')).data);
+  await assert.rejects(reader.adScreenshot('fixture.exe', path.resolve('out.png')), isCode('READ_ONLY_BLOCKED'));
+  await assert.rejects(reader.adClipboardGet({ out: path.resolve('clip.png') }), isCode('READ_ONLY_BLOCKED'));
+  // surface=focused is allowed without --app, while invalid nth/limit fail fast
+  assert.equal((await reader.adSnapshot(undefined, { surface: 'focused' })).command, 'snapshot');
+  await assert.rejects(reader.adFind('fixture.exe', { nth: 'abc' }), isCode('INVALID_ARGS'));
+  await assert.rejects(reader.adFind('fixture.exe', { limit: '0' }), isCode('INVALID_ARGS'));
+
+  // Cooperative batch of rich UIA controls succeeds in 1 process
+  const batchRes = await coop.adBatch([
+    { command: 'set-value', ref, value: 'hello' },
+    { command: 'select', ref, value: 'Option B' },
+    { command: 'check', ref },
+    { command: 'expand', ref },
+    { command: 'scroll', ref, direction: 'down', amount: 2 },
+    { command: 'is', ref, property: 'checked' },
+  ], {}, );
+  assert.equal(batchRes.completed_entries, 6);
+});
+
+test('exclusive mouse, hover, wheel, and window geometry commands enforce foreground and bounds checks', async () => {
+  const coop = client({ readOnly: false, mode: 'cooperative' });
+  for (const op of [
+    () => coop.adDoubleClick(ref),
+    () => coop.adRightClick(ref),
+    () => coop.adHover(ref),
+    () => coop.adMouseWheel(20, 30, { dy: -3, windowId: 'w-123' }),
+    () => coop.adResizeWindow(undefined, 800, 600, { windowId: 'w-123' }),
+    () => coop.adMoveWindow(undefined, 50, 60, { windowId: 'w-123' }),
+    () => coop.adMinimizeWindow(undefined, { windowId: 'w-123' }),
+    () => coop.adMaximizeWindow(undefined, { windowId: 'w-123' }),
+  ]) await assert.rejects(op(), isCode('DESKTOP_FOREGROUND_REQUIRED'));
+
+  const exclusive = client({ readOnly: false, mode: 'exclusive' });
+  const dbl = await exclusive.adDoubleClick(ref);
+  assert.equal(dbl.args[0], '--headed');
+  assert.equal(dbl.command, 'double-click');
+
+  const rclick = await exclusive.adRightClick(ref);
+  assert.equal(rclick.args[0], '--headed');
+  assert.equal(rclick.command, 'right-click');
+
+  const hoverRef = await exclusive.adHover(ref);
+  assert.equal(hoverRef.args[0], '--headed');
+  // Coordinate hover & wheel must verify windowId + bounds!
+  await assert.rejects(exclusive.adHover({ x: 20, y: 30 }), isCode('INVALID_ARGS'));
+  await assert.rejects(exclusive.adHover({ x: 500, y: 30 }, { windowId: 'w-123' }), isCode('DESKTOP_TARGET_UNVERIFIED'));
+  const hoverXy = await exclusive.adHover({ x: 20, y: 30 }, { windowId: 'w-123' });
+  assert.equal(hoverXy.args[0], '--headed');
+
+  await assert.rejects(exclusive.adMouseWheel(20, 30, { dy: -4 }), isCode('INVALID_ARGS'));
+  await assert.rejects(exclusive.adMouseWheel(500, 30, { dy: -4, windowId: 'w-123' }), isCode('DESKTOP_TARGET_UNVERIFIED'));
+  const wheel = await exclusive.adMouseWheel(20, 30, { dy: -4, windowId: 'w-123' });
+  assert.equal(wheel.args[0], '--headed');
+  assert.equal(wheel.command, 'mouse-wheel');
+
+  assert.equal((await exclusive.adResizeWindow(undefined, 900, 700, { windowId: 'w-123' })).command, 'resize-window');
+  assert.equal((await exclusive.adMoveWindow(undefined, 40, 50, { windowId: 'w-123' })).command, 'move-window');
+  assert.equal((await exclusive.adMinimizeWindow(undefined, { windowId: 'w-123' })).command, 'minimize');
+  assert.equal((await exclusive.adMaximizeWindow(undefined, { windowId: 'w-123' })).command, 'maximize');
+  const focusRes = await exclusive.adFocus(ref);
+  assert.equal(focusRes.args[0], '--headed');
+  assert.equal(focusRes.command, 'focus');
+
+  // Intra-batch TOCTOU guard: coordinate clicks cannot follow window geometry/focus mutations in the same batch
+  await assert.rejects(
+    exclusive.adBatch([
+      { command: 'minimize', windowId: 'w-123' },
+      { command: 'mouse-click', x: 20, y: 30, windowId: 'w-123' },
+    ]),
+    isCode('DESKTOP_TARGET_UNVERIFIED'),
+  );
+
+  // Dangerous shortcuts blocked across whitespace and modifier aliases
+  for (const badCombo of ['alt + f4', 'meta+l', 'option+f4', 'ctrl + alt + del']) {
+    await assert.rejects(exclusive.adPress(badCombo, { windowId: 'w-123' }), isCode('INVALID_ARGS'));
+  }
+});

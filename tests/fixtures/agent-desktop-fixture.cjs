@@ -81,6 +81,20 @@ process.stdin.on('end', () => {
             ok: true,
             data: { action: 'click', disposition: { delivery: 'delivered_unverified', retry: 'unsafe' } },
           });
+        } else if (item.command === 'select' && scenario.includes('select-unsupported')) {
+          results.push({
+            index: i,
+            command: 'select',
+            execution: 'completed',
+            ok: false,
+            error: {
+              code: 'ACTION_NOT_SUPPORTED',
+              message: 'ComboBox does not implement SelectionItemPattern',
+              disposition: { delivery: 'not_delivered', retry: 'safe' },
+            },
+          });
+          stopped = { reason: 'stop_on_error', index: i };
+          break;
         } else if (item.command === 'screenshot') {
           shotSeq += 1;
           const outPath = item.args?.output_path;
@@ -180,9 +194,32 @@ process.stdin.on('end', () => {
       return;
     }
 
+    if (scenario === 'select-unsupported' && command === 'select') {
+      console.log(JSON.stringify({
+        version: '2.6',
+        ok: false,
+        error: {
+          code: 'ACTION_NOT_SUPPORTED',
+          message: 'ComboBox does not implement SelectionItemPattern',
+          disposition: { delivery: 'not_delivered', retry: 'safe' },
+        },
+      }));
+      process.exitCode = 1;
+      return;
+    }
+
     let data = { command, args: received, stdin, disposition: { delivery: 'delivered_unverified', retry: 'unsafe' } };
     if (command === 'version') data = { version: scenario.startsWith('batch-stdin') ? '1.3.2-dev' : '1.3.1', os: 'fixture' };
     if (command === 'status') data = { accessibility: 'granted', desktopHome: process.env.AGENT_DESKTOP_HOME };
+    if (command === 'screenshot' && !args.some(a => a.endsWith('.png'))) {
+      data = {
+        data: Buffer.from('PNG_BASE64_FIXTURE').toString('base64'),
+        format: 'png',
+        width: 200,
+        height: 100,
+        scale_factor: 1,
+      };
+    }
     if (command === 'list-windows') {
       data = [{
         id: 'w-123',
