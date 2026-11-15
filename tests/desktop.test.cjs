@@ -10,7 +10,7 @@ test('named desktop button requires an explicit name', () => {
   assert.throws(() => invokeNamedButton({}), /Named desktop button required/);
 });
 
-test('named desktop button clicks an isolated local dialog', { timeout: 25000 }, async t => {
+test('named desktop button clicks an isolated local dialog', { timeout: 25000, skip: process.env.BROWSER_BRIDGE_GUI_TESTS !== '1' }, async t => {
   const resultPath = path.join(os.tmpdir(), 'abb-desktop-smoke-' + process.pid + '.txt');
   try { fs.unlinkSync(resultPath); } catch { }
   const dialog = spawn('pwsh', [
@@ -20,7 +20,7 @@ test('named desktop button clicks an isolated local dialog', { timeout: 25000 },
     path.join(__dirname, '..', 'scripts', 'Show-DesktopSmokeDialog.ps1'),
     '-ResultPath',
     resultPath
-  ], { windowsHide: false });
+  ], { windowsHide: true });
   t.after(() => {
     if (!dialog.killed) dialog.kill();
     try { fs.unlinkSync(resultPath); } catch { }
@@ -45,7 +45,7 @@ test('named window APIs require an explicit title and refuse Alt+F4', () => {
   assert.throws(() => sendKeysToNamedWindow({ windowTitle: 'x', keys: '%{F4}' }), /Alt\+F4/);
 });
 
-test('named window can focus, type and capture an isolated local dialog', { timeout: 25000 }, async t => {
+test('named window can focus, type and capture an isolated local dialog', { timeout: 25000, skip: process.env.BROWSER_BRIDGE_GUI_TESTS !== '1' }, async t => {
   const resultPath = path.join(os.tmpdir(), 'abb-window-smoke-' + process.pid + '.txt');
   const shotPath = path.join(os.tmpdir(), 'abb-window-smoke-' + process.pid + '.png');
   const windowTitle = 'AgentBrowserBridge-window-smoke-' + process.pid;
@@ -60,7 +60,7 @@ test('named window can focus, type and capture an isolated local dialog', { time
     resultPath,
     '-WindowTitle',
     windowTitle
-  ], { windowsHide: false });
+  ], { windowsHide: true });
   t.after(() => {
     if (!dialog.killed) dialog.kill();
     try { fs.unlinkSync(resultPath); } catch { }

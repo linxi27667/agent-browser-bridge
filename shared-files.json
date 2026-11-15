@@ -11,7 +11,6 @@
     "learnings/k3cloud/tools/k3-actions.cjs": "9c0a6f6c3a78ffa85168d37c66f44e0846d372734d604264d5c699f1d1d5402d",
     "learnings/k3cloud/tools/open-bill.cjs": "5adf3e70857ceaf01fcd5992829454b67d258ccda2a6da3e1d1f4af5872da776",
     "lib/cdp/advanced.js": "6bbd63ac408e5f8f8d50c1c6f9b8fa80e69d633b76e075bf6de13f7c84e3c3db",
-    "lib/cdp/element-ui.js": "d514eafc88255c4358a8d28cfc071b3453dcc607017d90040fbe60d623143188",
     "lib/cdp/locator.js": "25e2653f61d01ebb55a9884bf7ec0646fda294b37d8e5b1f1d3dc51aaf4dbb65",
     "lib/cdp/runner.js": "7fccd4a8a5a03184b833f5f0f0449ef40a742da8c4445bf8013f4a5867385c29",
     "lib/cdp/snapshot.js": "ef1fa948877c8e2d29addb4734f6212a8c44a45a5b91a0e67aa7fb052388bf72",

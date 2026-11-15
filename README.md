@@ -4,6 +4,26 @@ A small local bridge that lets Codex / Cursor / Antigravity agents connect to a 
 
 It supports Edge and Chrome on Windows through the same Chromium DevTools Protocol. Default to a dedicated profile with `--remote-debugging-port`; that path does not show the Edge Allow prompt. Each connection is checked against its local debug port, browser type, profile folder, and proxy setting before page access.
 
+## Unified browser and desktop workflows
+
+The browser engine remains JavaScript/Node.js; the optional native desktop engine is the Rust `agent-desktop` CLI. They cooperate through an asynchronous adapter, without rewriting either engine or mixing their element refs.
+
+```powershell
+node cli/agent.cjs --help
+node cli/agent.cjs doctor --expected-version 1.3.1
+node cli/agent.cjs route --url https://example.com
+node cli/agent.cjs desktop snapshot --app notepad.exe
+node cli/agent.cjs run --file .\my-reviewed-workflow.cjs
+```
+
+After installation, `npm run agent -- <command>` invokes the same entry. `npm test` runs without visible desktop fixtures; `npm run test:desktop` explicitly enables the isolated GUI checks and can take focus. `npm run smoke:workflow` checks the combined workflow against isolated fixtures without physical input. Report each result separately; fixture success does not establish correctness in an untested business application.
+
+The new entry defaults to read-only cooperative operation. `--write` allows supported changes; known foreground operations additionally require `--mode exclusive`. These switches express the workflow's execution policy, not new business authorization. Text goes through stdin, and every `desktop.ad*` JavaScript call must be awaited. The four original PowerShell helpers remain legacy APIs and do not inherit this policy.
+
+Use APIs, CLIs, or direct file processing before automating a UI. Use CDP for web content, UI Automation for native controls, and physical input only when necessary. A workflow step counts as verified only when its explicit postcondition returns `true`; a successful dispatch alone is insufficient. No uncertain action is automatically retried.
+
+Read the [complete Chinese usage and recovery guide](docs/automation.md) before running a workflow. Trusted workflow JavaScript is executable code, not a security sandbox. Cooperative mode rejects known foreground commands; it cannot prevent an application from opening its own UI or stop a human from using the shared desktop.
+
 ## Hybrid AX/DOM Snapshot, Semantic Locators & Code-First Runner (0.7.0)
 
 v0.7.0 integrates the open-source capabilities of `vercel-labs/agent-browser` (hybrid ARIA + cursor-interactive DOM snapshot, hidden radio/checkbox promotion, durable `@e1` refs, LCS `diffSnapshots`) and `citrolabs/ego-lite` (semantic locators, actionability hit-test, code-first runner with `page-context-guard`, and structured site `learnings/`), while keeping 100% of AgentBrowserBridge's security invariants (`guardExpression` + dedicated profile verification):
@@ -85,7 +105,7 @@ The launcher prints the local CDP address. Set the same values before using the 
 
 For Chrome, use port 9222, the Chrome-default profile, and chrome for BROWSER_BRIDGE_EXPECT_BROWSER.
 
-check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, user-auth wait, dedicated-tab lease, concurrent dual-task isolation, hybrid `@ref` snapshot, semantic locators (`role:`, `:text-is()`), and `diffSnapshots`. `npm test` also covers concurrency, locator/snapshot/runner/learnings unit tests, and clicks an isolated local desktop dialog through UI Automation.
+check verifies the selected browser instance. smoke opens and closes a temporary about:blank page to check connection, unique selector wait, native click, Chinese input, DOM drag, Enter/Tab/Escape, select option, readback, captcha-image capture, user-auth wait, dedicated-tab lease, concurrent dual-task isolation, hybrid `@ref` snapshot, semantic locators (`role:`, `:text-is()`), and `diffSnapshots`. `npm test` covers concurrency, locator/snapshot/runner/learnings and automation contracts without opening the desktop GUI fixtures. Use `npm run test:desktop` only for the explicit isolated desktop check; it can take foreground focus.
 
 Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the dedicated window after check/smoke.
 
@@ -104,6 +124,6 @@ Dedicated-profile smoke uses isolated `about:blank` pages only. Do not close the
 - The bridge refuses an unexpected browser, port, profile, or proxy.
 - Never attach to a normal daily browser profile unless the user explicitly asks again. Never copy cookies or commit profile data.
 - Look up credentials in the local Obsidian password book. If missing, ask the user and write the entry there. Never print or save credentials in Git. Optional `captureUniquePng` is for reading a unique image, not for a third-party solver.
-- Optional desktop clicks (`invokeNamedButton`) need an explicit button name. Window-level helpers (`focusNamedWindow`, `sendKeysToNamedWindow`, `captureNamedWindow`) need an exact window title. They do not close windows (Alt+F4 is refused).
-- A CDP debug port grants control of that dedicated browser to local software. Close the dedicated window when finished.
+- New desktop integrations use `createDesktopClient` with explicit execution policy. The legacy PowerShell helpers need an explicit button name or exact window title, but do not inherit the new client's read-only or foreground checks. Never use them to bypass a policy refusal.
+- A CDP debug port grants control of that dedicated browser to local software. Leave a user's existing window open; close it only when the user explicitly asks.
 - This project does not bypass site controls, authentication, or approval rules.
