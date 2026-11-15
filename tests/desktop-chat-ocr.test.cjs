@@ -722,3 +722,161 @@ test('Windows live custom-drawn WeCom simulator: tray wake, OCR session switch, 
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 });
+
+test('winHelper.hashImageRegion isolates messages region and deliverChatSessionVerified rejects off-region changes', { skip: process.platform !== 'win32' }, async () => {
+  const { execFileSync } = require('node:child_process');
+  const winHelper = require('../lib/desktop/winHelper');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-region-hash-'));
+  const imgBefore = path.join(tmpDir, 'before.png');
+  const imgSidebarDiff = path.join(tmpDir, 'after-sidebar-diff.png');
+  const imgMsgDiff = path.join(tmpDir, 'after-msg-diff.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Add-Type -AssemblyName System.Drawing;
+       function Save-TestPng([string]$p, [System.Drawing.Color]$sideColor, [System.Drawing.Color]$msgColor) {
+         $b = New-Object System.Drawing.Bitmap(480, 360);
+         $g = [System.Drawing.Graphics]::FromImage($b);
+         $g.Clear([System.Drawing.Color]::White);
+         $sb = New-Object System.Drawing.SolidBrush($sideColor);
+         $mb = New-Object System.Drawing.SolidBrush($msgColor);
+         $g.FillRectangle($sb, 10, 10, 40, 40);
+         $g.FillRectangle($mb, 240, 180, 40, 40);
+         $sb.Dispose(); $mb.Dispose(); $g.Dispose();
+         $b.Save($p, [System.Drawing.Imaging.ImageFormat]::Png);
+         $b.Dispose();
+       }
+       Save-TestPng '${imgBefore.replace(/'/g, "''")}' ([System.Drawing.Color]::Black) ([System.Drawing.Color]::Gray);
+       Save-TestPng '${imgSidebarDiff.replace(/'/g, "''")}' ([System.Drawing.Color]::Red) ([System.Drawing.Color]::Gray);
+       Save-TestPng '${imgMsgDiff.replace(/'/g, "''")}' ([System.Drawing.Color]::Black) ([System.Drawing.Color]::Blue);`,
+    ], { windowsHide: true });
+
+    const [hBefore, hSidebarDiff, hMsgDiff] = await Promise.all([
+      winHelper.hashImageRegion(imgBefore, { region: 'messages' }),
+      winHelper.hashImageRegion(imgSidebarDiff, { region: 'messages' }),
+      winHelper.hashImageRegion(imgMsgDiff, { region: 'messages' }),
+    ]);
+    assert.equal(hBefore.ok, true);
+    assert.equal(hBefore.sha256, hSidebarDiff.sha256, 'Messages region hash must ignore pixels outside messages region');
+    assert.notEqual(hBefore.sha256, hMsgDiff.sha256, 'Messages region hash must change when transcript pixels change');
+
+    const origOcr = winHelper.ocrImage;
+    const origEnsure = winHelper.assistForegroundWindow;
+    let shotCall = 0;
+    const mockWindow = {
+      id: 'w-99901',
+      pid: 12345,
+      app_name: 'WXWork',
+      title: 'WXWork',
+      is_focused: true,
+      minimized: false,
+      bounds: { x: 0, y: 0, width: 480, height: 360 },
+    };
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-99901',
+        window: mockWindow,
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds: mockWindow.bounds,
+      }),
+      adListWindows: async () => [mockWindow],
+      adFocusWindow: async () => ({ ok: true }),
+      adClickAt: async () => ({ ok: true }),
+      adPasteText: async () => ({ ok: true }),
+      adShortcut: async () => ({ ok: true }),
+      adClipboardClear: async () => ({ ok: true }),
+      adBatch: async (steps) => {
+        const results = steps.map(step => {
+          if (step.command === 'screenshot' && step.outputPath) {
+            shotCall += 1;
+            const src = shotCall === 1 ? imgBefore : imgSidebarDiff;
+            fs.copyFileSync(src, step.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results };
+      },
+      adScreenshot: async (_opts, outputPath) => {
+        const out = typeof outputPath === 'string' ? outputPath : path.join(tmpDir, 'preflight.png');
+        fs.copyFileSync(imgBefore, out);
+        return { path: out };
+      },
+    };
+    winHelper.assistForegroundWindow = async () => ({
+      ok: true,
+      focused: true,
+      isInteractiveDefaultDesktop: true,
+      clampedToWorkArea: false,
+    });
+    winHelper.ocrImage = async (_img, opts = {}) => ({
+      ok: true,
+      text: opts.region === 'header' ? '文件传输助手' : '',
+      lines: opts.region === 'header'
+        ? [{ text: '文件传输助手', x: 160, y: 10, width: 80, height: 20 }]
+        : [],
+      matches: opts.region === 'header' && opts.find
+        ? [{ lineText: '文件传输助手', matchedText: '文件传输助手', matchKind: 'exact', screen: { x: 200, y: 20 } }]
+        : [],
+    });
+    try {
+      await assert.rejects(
+        deliverChatSessionVerified(mockDesktop, {
+          app: 'WeCom',
+          windowId: 'w-99901',
+          session: '文件传输助手',
+          screenshotDir: path.join(tmpDir, 'shots'),
+          items: ['offscreen-miss-check'],
+        }),
+        err => err?.code === 'VISUAL_STATE_UNCHANGED'
+          && err?.disposition?.delivery === 'delivered_unverified'
+          && err?.disposition?.retry === 'unsafe'
+          && /transcript/i.test(err.message),
+      );
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origEnsure;
+    }
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('ensureWindowReady runs Win32 work-area clamp even when already focused and refreshes bounds', { skip: process.platform !== 'win32' }, async () => {
+  const winHelper = require('../lib/desktop/winHelper');
+  const { ensureWindowReady } = require('../lib/automation/scenes/desktopWindow');
+  const origAssist = winHelper.assistForegroundWindow;
+  let assistCalls = 0;
+  let currentBounds = { x: -105, y: 849, width: 986, height: 736 };
+  const mockDesktop = {
+    adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+    adInspectCapabilities: async () => ({
+      windowId: 'w-13699030',
+      window: { id: 'w-13699030', pid: 24184, is_focused: true, minimized: false, bounds: currentBounds },
+      mode: 'custom_ui_visual',
+      isFocused: true,
+      minimized: false,
+      bounds: currentBounds,
+    }),
+    adListWindows: async () => ([
+      { id: 'w-13699030', pid: 24184, is_focused: true, minimized: false, bounds: currentBounds },
+    ]),
+    adFocusWindow: async () => ({ ok: true }),
+  };
+  winHelper.assistForegroundWindow = async () => {
+    assistCalls += 1;
+    currentBounds = { x: 0, y: 424, width: 986, height: 736 };
+    return { ok: true, focused: true, isInteractiveDefaultDesktop: true, clampedToWorkArea: true };
+  };
+  try {
+    const ready = await ensureWindowReady(mockDesktop, { windowId: 'w-13699030', app: 'WeCom' }, { focus: 'auto' });
+    assert.equal(assistCalls, 1, 'Should invoke Win32 focus/clamp helper even when already focused');
+    assert.ok(ready.actions.includes('move_onscreen'));
+    assert.deepEqual(ready.bounds, { x: 0, y: 424, width: 986, height: 736 });
+  } finally {
+    winHelper.assistForegroundWindow = origAssist;
+  }
+});
