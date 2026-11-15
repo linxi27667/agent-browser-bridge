@@ -52,5 +52,5 @@ node cli/abb.cjs --scene lceda lceda status
 node cli/abb.cjs --scene lceda lceda reconnect
 
 # 显式导入或升级指定 .eext 插件包
-node cli/abb.cjs --scene lceda lceda import-ext --eext "C:\Users\juncheng.liu\Desktop\Easyeda_Agent\extensions\easyeda-agent-connector_v1.14.0.eext"
+node cli/abb.cjs --scene lceda lceda import-ext --eext "<PATH_TO_EXTENSION>\easyeda-agent-connector_v1.14.0.eext"
 ```

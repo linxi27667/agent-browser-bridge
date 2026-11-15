@@ -21,7 +21,7 @@
 
 ```powershell
 # Step 1: 勾选目标用户复选框（切勿点蓝字姓名超链接以免锁单）
-node cli/abb.cjs --scene k3-admin k3 select-row "何齐新"
+node cli/abb.cjs --scene k3-admin k3 select-row "测试用户"
 
 # Step 2: 展开工具栏“密码策略”下拉并点击“重置密码”（自动悬停 + 等待 320ms 下拉动画稳定后点击叶子项）
 node cli/abb.cjs --scene k3-admin k3 split-menu "密码策略" "重置密码"

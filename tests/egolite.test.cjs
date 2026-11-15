@@ -195,7 +195,7 @@ test('learnings engine validates site manifests, matches URLs, and runs site too
     evalChecked: async () => ({
       totalCount: 1,
       rows: [
-        ['1', '数电票', '26442000000012345678', '91440000MA5XXXXXX', '某供应商', '91440101MA5YYYYYY', '高昌机电', '2026-11-01', '1000.00', '130.00', '1130.00', '增值税发票管理系统', '数电普票', '正常', '正数', '正常', '张三', '测试备注'],
+        ['1', '数电票', '26442000000012345678', '91440000MA5XXXXXX', '某供应商', '91440101MA5YYYYYY', '示例机电有限公司', '2026-11-01', '1000.00', '130.00', '1130.00', '增值税发票管理系统', '数电普票', '正常', '正数', '正常', '张三', '测试备注'],
       ],
     }),
   };
@@ -203,7 +203,7 @@ test('learnings engine validates site manifests, matches URLs, and runs site too
   assert.equal(parsed.totalCount, 1);
   assert.equal(parsed.parsedCount, 1);
   assert.equal(parsed.invoices[0].invoiceNo, '26442000000012345678');
-  assert.equal(parsed.invoices[0].buyerName, '高昌机电');
+  assert.equal(parsed.invoices[0].buyerName, '示例机电有限公司');
 });
 
 test('hud and advanced capabilities: dialog guard, observe ring buffer, and waitForDownload', async () => {

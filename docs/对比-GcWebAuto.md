@@ -1,7 +1,7 @@
 # GcWebAuto 与 AgentBrowserBridge 对照
 
-- 第一个：`C:\GkDesktop\GitProjects\GcWebAuto`（`gcwebauto` v0.5.0）
-- 第二个：`C:\Users\juncheng.liu\Desktop\AgentBrowserBridge-CrossBrowser`（`agent-browser-bridge` v0.6.0）
+- 第一个：`<WORKSPACE>\GcWebAuto`（`gcwebauto` v0.5.0）
+- 第二个：`<WORKSPACE>\AgentBrowserBridge-CrossBrowser`（`agent-browser-bridge` v0.6.0）
 - 结论：两边共用原生 CDP + `ws`。第二个保留 Edge 场景隔离与完整守卫原语；**0.6.0 已合并第一个的多 Agent 并发治理**（页面租约 + UI 短锁 + 专属工作页 + 反后台节流）。
 
 ## 1. 一句话定位

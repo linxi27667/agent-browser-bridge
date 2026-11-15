@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createAutomation, routeTask, doctor, runWorkflow, exclusiveLock, loadLocalConfig } = require('../lib/automation');
 const { fail, normalizeOptions, serializeError } = require('../lib/automation/errors');
+const appRegistry = require('../lib/desktop/appRegistry');
 const sceneMod = require('../lib/cdp/scene');
 
 const HELP = `Agent Browser Bridge unified canonical entry (trusted local code, not a sandbox)
@@ -24,8 +25,15 @@ Single canonical CLI — do NOT call legacy PowerShell helpers or spawn per-step
   node cli/agent.cjs --write --scene smoke browser close --url example.com | --target <id>
   node cli/agent.cjs --write --scene smoke browser press Enter [--no-diff]
   node cli/agent.cjs --mode exclusive --scene smoke browser shot [--selector e1] [--out shot.png]
+  node cli/agent.cjs desktop apps [--app wecom]
+  node cli/agent.cjs desktop windows [--app wecom] [--title-includes SUB]
+  node cli/agent.cjs --write --mode exclusive desktop open-app --app wecom [--exe ABS_PATH] [--title-includes SUB]
   node cli/agent.cjs desktop capabilities --app notepad.exe [--window-id w-...] [--title-includes SUB]
-  node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app notepad.exe [--no-focus] [--no-restore]
+  node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app notepad.exe [--launch] [--no-focus] [--no-restore]
+  node cli/agent.cjs desktop shot --app wecom [--window-id w-...] [--out shot.png]
+  node cli/agent.cjs desktop ocr --app wecom [--region full|header|sidebar|messages|composer] [--find TEXT]
+  node cli/agent.cjs --write --mode exclusive desktop click-text --app wecom --text "文件传输助手" [--region sidebar]
+  node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
   node cli/agent.cjs --write [--mode exclusive] desktop deliver --stdin
   node cli/agent.cjs --write [--mode exclusive] desktop batch --stdin
   node cli/agent.cjs desktop snapshot --app explorer.exe
@@ -376,6 +384,174 @@ async function executeDesktopCommand(options, args) {
   if (!args.length) throw fail('INVALID_ARGS', 'desktop requires a command');
   const sub = args[0];
 
+  if (sub === 'apps') {
+    const rest = args.slice(1);
+    const kv = pairs(rest, ['--app']);
+    return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
+      const desktop = createAutomation({ ...options, signal: leaseSignal }).desktop;
+      const running = await desktop.adListApps().catch(() => []);
+      const known = kv['--app']
+        ? [appRegistry.resolveAppSpec(kv['--app'])]
+        : appRegistry.listKnownApps();
+      return { knownApps: known, runningApps: running };
+    });
+  }
+
+  if (sub === 'windows') {
+    const rest = args.slice(1);
+    const kv = pairs(rest, ['--app', '--window-id', '--title-includes', '--exe']);
+    return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
+      const desktop = createAutomation({ ...options, signal: leaseSignal }).desktop;
+      const found = await appRegistry.findMatchingWindows(desktop, kv['--app'], {
+        windowId: kv['--window-id'] || options.windowId,
+        titleIncludes: kv['--title-includes'],
+        exePath: kv['--exe'],
+        signal: leaseSignal,
+        timeoutMs: options.timeoutMs,
+      });
+      return { count: found.windows.length, windows: found.windows };
+    });
+  }
+
+  if (sub === 'open-app') {
+    if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop open-app requires --write');
+    if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop open-app requires --mode exclusive');
+    const rest = args.slice(1);
+    const boolFlags = new Set(['--prefer-focused', '--focus', '--no-focus', '--no-restore']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--title-includes']);
+    const focusOpt = rest.includes('--no-focus') ? false : (rest.includes('--focus') ? true : 'auto');
+    return exclusiveLock(options, (_assertHeld, leaseSignal) => {
+      const automation = createAutomation({ ...options, signal: leaseSignal });
+      return automation.scenes.ensureWindowReady(
+        automation.desktop,
+        {
+          app: kv['--app'],
+          exePath: kv['--exe'],
+          windowId: kv['--window-id'] || options.windowId,
+          titleIncludes: kv['--title-includes'],
+          preferFocused: true,
+        },
+        {
+          focus: focusOpt,
+          restoreIfMinimized: !rest.includes('--no-restore'),
+          launchIfMissing: true,
+          signal: leaseSignal,
+          timeoutMs: options.timeoutMs,
+        },
+      );
+    });
+  }
+
+  if (sub === 'shot') {
+    const rest = args.slice(1);
+    const kv = pairs(rest, ['--app', '--window-id', '--title-includes', '--out', '--output', '--screen']);
+    return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
+      const cdp = require('../lib/cdp');
+      const desktop = createAutomation({ ...options, signal: leaseSignal }).desktop;
+      const outArg = kv['--out'] || kv['--output'];
+      const outPath = outArg
+        ? path.resolve(outArg)
+        : path.join(cdp.artifactsDir(), `desktop-shot-${cdp.formatTimestamp()}.png`);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      if (kv['--screen'] !== undefined) {
+        await desktop.adScreenshot(undefined, outPath, { screen: Number(kv['--screen']) });
+        return { screen: Number(kv['--screen']), outPath };
+      }
+      const found = await appRegistry.findMatchingWindows(desktop, kv['--app'], {
+        windowId: kv['--window-id'] || options.windowId,
+        titleIncludes: kv['--title-includes'],
+        signal: leaseSignal,
+        timeoutMs: options.timeoutMs,
+      });
+      if (!found.windows.length) throw fail('WINDOW_NOT_FOUND', 'Target window for screenshot was not found');
+      const targetWin = found.windows[0];
+      await desktop.adScreenshot(undefined, outPath, { windowId: targetWin.id });
+      return { windowId: targetWin.id, title: targetWin.title, bounds: targetWin.bounds, outPath };
+    });
+  }
+
+  if (sub === 'ocr') {
+    const rest = args.slice(1);
+    const kv = pairs(rest, ['--app', '--window-id', '--title-includes', '--region', '--find', '--match', '--scale', '--lang', '--out', '--output']);
+    const outArg = kv['--out'] || kv['--output'];
+    return exclusiveLock(options, (_assertHeld, leaseSignal) => (
+      createAutomation({ ...options, signal: leaseSignal }).desktop.adOcrWindow(kv['--app'], {
+        windowId: kv['--window-id'] || options.windowId,
+        titleIncludes: kv['--title-includes'],
+        region: kv['--region'],
+        find: kv['--find'] ?? kv['--match'],
+        scale: kv['--scale'] !== undefined ? Number(kv['--scale']) : undefined,
+        lang: kv['--lang'],
+        outputPath: outArg ? path.resolve(outArg) : undefined,
+        signal: leaseSignal,
+        timeoutMs: options.timeoutMs,
+      })
+    ));
+  }
+
+  if (sub === 'click-text') {
+    if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop click-text requires --write');
+    if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop click-text requires --mode exclusive');
+    const rest = args.slice(1);
+    const boolFlags = new Set(['--double', '--launch', '--no-restore']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), [
+      '--app', '--exe', '--window-id', '--title-includes', '--text', '--region', '--index', '--button', '--scale',
+    ]);
+    return exclusiveLock(options, (_assertHeld, leaseSignal) => {
+      const automation = createAutomation({ ...options, signal: leaseSignal });
+      return automation.scenes.clickTextVerified(
+        automation.desktop,
+        {
+          app: kv['--app'],
+          exePath: kv['--exe'],
+          windowId: kv['--window-id'] || options.windowId,
+          titleIncludes: kv['--title-includes'],
+          text: kv['--text'],
+          region: kv['--region'],
+          index: kv['--index'] !== undefined ? Number(kv['--index']) : 0,
+          button: kv['--button'],
+          scale: kv['--scale'] !== undefined ? Number(kv['--scale']) : 2,
+          doubleClick: rest.includes('--double'),
+          launchIfMissing: rest.includes('--launch'),
+          restoreIfMinimized: !rest.includes('--no-restore'),
+        },
+        { signal: leaseSignal, timeoutMs: options.timeoutMs },
+      );
+    });
+  }
+
+  if (sub === 'chat-send') {
+    if (args.length !== 2 || args[1] !== '--stdin') {
+      throw fail('INVALID_ARGS', 'desktop chat-send requires --stdin with JSON payload on standard input');
+    }
+    if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop chat-send requires --write');
+    if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop chat-send requires --mode exclusive');
+    const raw = await stdinText();
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      throw fail('INVALID_ARGS', 'desktop chat-send --stdin payload must be valid JSON');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw fail('INVALID_ARGS', 'desktop chat-send --stdin requires a JSON object');
+    }
+    const baseSpec = payload.spec && typeof payload.spec === 'object' ? payload.spec : payload;
+    const spec = {
+      ...baseSpec,
+      ...(payload.items && !baseSpec.items ? { items: payload.items } : {}),
+      ...(payload.messages && !baseSpec.messages && !baseSpec.items ? { messages: payload.messages } : {}),
+      ...(options.windowId && !baseSpec.windowId ? { windowId: options.windowId } : {}),
+    };
+    return exclusiveLock(options, (_assertHeld, leaseSignal) => {
+      const automation = createAutomation({ ...options, signal: leaseSignal });
+      return automation.scenes.deliverChatSessionVerified(automation.desktop, spec, {
+        signal: leaseSignal,
+        timeoutMs: options.timeoutMs,
+      });
+    });
+  }
+
   if (sub === 'batch') {
     if (args.length !== 2 || args[1] !== '--stdin') {
       throw fail('INVALID_ARGS', 'desktop batch requires --stdin with a JSON step array on standard input');
@@ -406,11 +582,12 @@ async function executeDesktopCommand(options, args) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw fail('INVALID_ARGS', 'desktop deliver --stdin requires an object with spec and messages');
     }
+    const rawSpec = payload.spec && typeof payload.spec === 'object' ? payload.spec : payload;
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });
       const spec = {
-        ...(payload.spec && typeof payload.spec === 'object' ? payload.spec : {}),
-        ...(options.windowId && !payload.spec?.windowId ? { windowId: options.windowId } : {}),
+        ...rawSpec,
+        ...(options.windowId && !rawSpec.windowId ? { windowId: options.windowId } : {}),
       };
       return automation.scenes.deliverMessagesVerified(automation.desktop, spec, payload.messages, {
         signal: leaseSignal,
@@ -421,15 +598,20 @@ async function executeDesktopCommand(options, args) {
 
   if (sub === 'ensure-ready') {
     const rest = args.slice(1);
-    const boolFlags = new Set(['--prefer-focused', '--focus', '--no-focus', '--no-restore']);
-    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--window-id', '--title-includes']);
+    const boolFlags = new Set(['--prefer-focused', '--focus', '--no-focus', '--no-restore', '--launch']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--title-includes']);
     const focusOpt = rest.includes('--no-focus') ? false : (rest.includes('--focus') ? true : 'auto');
+    if (rest.includes('--launch') || rest.includes('--focus')) {
+      if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop ensure-ready with --launch or --focus requires --write');
+      if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop ensure-ready with --launch or --focus requires --mode exclusive');
+    }
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });
       return automation.scenes.ensureWindowReady(
         automation.desktop,
         {
           app: kv['--app'],
+          exePath: kv['--exe'],
           windowId: kv['--window-id'] || options.windowId,
           titleIncludes: kv['--title-includes'],
           preferFocused: rest.includes('--prefer-focused') ? true : undefined,
@@ -437,6 +619,7 @@ async function executeDesktopCommand(options, args) {
         {
           focus: focusOpt,
           restoreIfMinimized: !rest.includes('--no-restore'),
+          launchIfMissing: rest.includes('--launch'),
           signal: leaseSignal,
           timeoutMs: options.timeoutMs,
         },

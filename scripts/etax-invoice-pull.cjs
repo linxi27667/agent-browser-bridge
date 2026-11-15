@@ -285,33 +285,41 @@ async function cmdStatus(browser) {
     url: (item.url || '').split('?')[0]
   }));
   let identity = { enterprise: false, natural: false, org: '' };
+  const orgKeyword = (process.env.ETAX_ORG_KEYWORD || '').trim();
   const home = await attachByUrl(browser, 'etax.guangdong.chinatax.gov.cn');
   if (home) {
-    identity = await home.page.evalChecked(`(() => {
+    identity = await home.page.evalChecked(`((orgKw) => {
       const text = document.body.innerText || '';
+      const hasOrgKw = orgKw ? text.includes(orgKw) : false;
+      const genericOrg = (text.match(/[\\u4e00-\\u9fa5A-Za-z0-9（）()]{2,30}(?:股份有限公司|有限责任公司|有限公司)/) || [])[0] || '';
+      const kwOrg = orgKw ? ((text.match(new RegExp(orgKw.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '[^\\\\s]{0,20}')) || [])[0] || '') : '';
       return {
         natural: /自然人/.test(text) && !/股份有限公司|有限公司/.test(text),
-        enterprise: /广州高昌/.test(text) || /一般纳税人/.test(text),
-        org: (text.match(/广州高昌[^\\s]{0,20}/) || [])[0] || '',
+        enterprise: hasOrgKw || Boolean(genericOrg) || /一般纳税人|小规模纳税人|企业业务/.test(text),
+        org: kwOrg || genericOrg,
         hasAccount: text.includes('税务数字账户')
       };
-    })()`) || identity;
+    })(${JSON.stringify(orgKeyword)})`) || identity;
   }
   const query = Boolean(cdp.findPageByUrl(await cdp.listTargets(browser), { urlIncludes: 'invoice-query' }));
   console.log(JSON.stringify({ ok: identity.enterprise || query, pages, identity, hasQuery: query }, null, 2));
 }
 
 async function cmdWaitLogin(browser) {
+  const orgKeyword = (process.env.ETAX_ORG_KEYWORD || '').trim();
   for (let i = 0; i < 90; i += 1) {
     const home = await attachByUrl(browser, 'chinatax.gov.cn');
     if (home) {
-      const val = await home.page.evalChecked(`(() => {
+      const val = await home.page.evalChecked(`((orgKw) => {
         const text = document.body.innerText || '';
+        const hasEnterprise = orgKw
+          ? text.includes(orgKw)
+          : (/股份有限公司|有限公司|一般纳税人|小规模纳税人|税务数字账户/.test(text) && !(/自然人/.test(text) && !/股份有限公司|有限公司/.test(text)));
         return {
-          enterprise: /广州高昌/.test(text),
-          natural: text.includes('自然人') && !text.includes('广州高昌')
+          enterprise: hasEnterprise,
+          natural: text.includes('自然人') && !hasEnterprise
         };
-      })()`);
+      })(${JSON.stringify(orgKeyword)})`);
       if (val && val.enterprise) {
         console.log(JSON.stringify({ ok: true, waited: i, identity: 'enterprise' }));
         return;
@@ -319,7 +327,7 @@ async function cmdWaitLogin(browser) {
     }
     await cdp.sleep(2000);
   }
-  throw new Error('wait login timeout: need enterprise 广州高昌');
+  throw new Error(`wait login timeout: enterprise session required${orgKeyword ? ` (${orgKeyword})` : ''}`);
 }
 
 async function collectAll(page) {

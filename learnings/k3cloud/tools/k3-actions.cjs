@@ -1,4 +1,4 @@
-// 金蝶云星空（K3Cloud HTML5）实战验证过的只读操作封装（2026-11-09 在 10.1.3.38 / 101 广州高昌 实测）
+// 金蝶云星空（K3Cloud HTML5）实战验证过的只读操作封装
 // 原则：只读。不点保存/提交/审核；以“修改”模式打开的未审核单据读完立即关闭，避免占用同事的网控锁。
 const path = require('node:path');
 const cdp = require(path.resolve(__dirname, '../../../lib/cdp'));

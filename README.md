@@ -15,8 +15,14 @@ node cli/agent.cjs route --url https://example.com
 node cli/agent.cjs browser scenes
 node cli/agent.cjs --scene smoke browser snap --open-url https://example.com
 node cli/agent.cjs --write --scene smoke browser hover-click ".todo-list li" "button.destroy"
+node cli/agent.cjs desktop apps
+node cli/agent.cjs desktop windows
 node cli/agent.cjs desktop capabilities --app notepad.exe
+node cli/agent.cjs --write --mode exclusive desktop open-app --app wecom
 node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app notepad.exe
+node cli/agent.cjs desktop ocr --app WXWork.exe --region header --match "文件传输助手"
+node cli/agent.cjs --write --mode exclusive desktop click-text --app WXWork.exe --text "文件传输助手" --region sidebar
+node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
 node cli/agent.cjs --write desktop deliver --stdin
 node cli/agent.cjs --write --mode exclusive desktop batch --stdin
 node cli/agent.cjs run --file .\my-reviewed-workflow.cjs

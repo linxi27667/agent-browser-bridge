@@ -96,7 +96,11 @@ console.log(snapshot.ref_count);
 
 - **能力快速识别（`adInspectCapabilities`）**：面对陌生桌面窗口时，先调 `await desktop.adInspectCapabilities('Weixin.exe', { preferFocused: true })`（或 `node cli/agent.cjs desktop capabilities --app Weixin.exe`）。返回 `minimized_unobservable`、`uia_semantic`（自动将只读/禁用文本框分离至 `readOnlyEditableRefs`，仅将真正可写输入框放入 `editableRefs`）或 `custom_ui_visual`（0 个可用客户区控件或仅剩标题栏最小化/最大化/关闭按钮）。一旦判定为 `custom_ui_visual`，立即切换受控视觉路线，不再反复轮询 `find`/`snapshot`。
 - **受约束原生批量（`adBatch`）**：`await desktop.adBatch(steps, { windowId })`（或 `node cli/agent.cjs --write --mode exclusive desktop batch --stdin`）逐项校验白名单、只读/独占策略与坐标窗口预检。当桌面运行时支持 `batch --stdin`（`1.3.2-dev` 及以上）时单次进程完成全部动作与回读；在 `1.3.1` 上自动降级为安全分段执行，确保任何输入文本绝不进入进程命令行参数，且返回结果自动脱敏写入字段。`adRaw(['batch', ...])` 保持拦截。
-- **通用窗口就绪与多消息核验投递（`scenes`）**：工作流上下文注入 `scenes.ensureWindowReady(desktop, target, options)`（自动恢复最小化、聚焦并校验窗口尺寸非折叠）与 `scenes.deliverMessagesVerified(desktop, spec, messages, options)`（支持 `uia_semantic` 单批 `set-value + get + click` 与 `custom_ui_visual` 单批 `screenshot + mouse-click + clipboard-set + ctrl+v + return + screenshot` 帧哈希变化核验；任何回读不符或提交异常立即停止并标记 `retry: 'unsafe'`，零自动重发）。
+- **通用窗口就绪与多消息核验投递（`scenes`）**：工作流上下文注入 `scenes.ensureWindowReady(desktop, target, options)`（自动恢复最小化、通过 `AttachThreadInput` 辅助解锁 Windows 前台锁、聚焦并校验窗口尺寸非折叠；若检测到当前进程运行在非交互隔离桌面如 `exebox-*`，立即抛出 `DESKTOP_SANDBOX_ISOLATED` 明确提示切回 `WinSta0\Default`）与 `scenes.deliverMessagesVerified(desktop, spec, messages, options)`（支持 `uia_semantic` 单批 `set-value + get + click` 与 `custom_ui_visual` 单批帧哈希变化核验；任何回读不符或提交异常立即停止并标记 `retry: 'unsafe'`，零自动重发）。
+- **自绘窗口原生 OCR、应用唤醒与富媒体会话投递（企业微信/微信/QQ/飞书/钉钉）**：
+  - 应用注册表与托盘唤醒：`desktop apps`、`desktop windows`、`--write --mode exclusive desktop open-app --app wecom`（内置中英文别名发现注册表/运行进程/常见目录，自动唤醒托盘隐藏窗口并忽略阴影小弹窗）。
+  - 零依赖后台区域 OCR：`desktop ocr --app WXWork.exe --region header|sidebar|messages|composer|full --match "文件传输助手"`（基于系统内置 `.NET Framework csc.exe` + `Windows.Media.Ocr`，后台 `PrintWindow` 抓图不抢焦点，支持 2x 双三次放大、中文分词去空格与 4~8 字词距 `<=1` 防近似字误识）。
+  - 文本定位点击与富媒体核验投递：`desktop click-text --app WXWork.exe --text "文件传输助手" --region sidebar`；`--write --mode exclusive desktop chat-send --stdin`（先校验顶部标题栏 OCR，不匹配时自动侧栏 OCR 点击或 `Ctrl+F` 搜索切换；发送前强制通过 `CHAT_TARGET_UNVERIFIED` 标题硬门禁，未命中目标会话绝不发送任何内容；单批 `adBatch` 支持混合投递 `text`、内联图片 `image`（`.png`/`.jpg`/`.bmp` 自动转 `CF_DIB+PNG`）、动图表情包 `sticker`（`.gif` 走 `CF_HDROP` `clipboard-set --file-url`）与普通附件 `file`，内置剪贴板异步解码节流等待，投递后核对窗口帧哈希与消息区 OCR）。
 - **单锁悬停点击（`page.hoverAndClick`）**：针对 CSS `:hover` 才显现的行内操作按钮（如 TodoMVC `.destroy`），使用 `await page.hoverAndClick(hoverSelector, clickSelector, guard)` 或 `abb hover-click`，在同一端口 UI 锁内完成悬停与点击。
 
 ## 5. 工作流与验收
@@ -169,11 +173,11 @@ npm run test:desktop
 
 ## 8. 2026-11-15 本机隔离验收实例
 
-以下是个人电脑 Windows 用户 `30817` 的实测实例，不是通用默认路径：
+以下是 Windows 本机实测实例，不是通用默认路径：
 
 - 桥接版本：`0.8.0`；桌面后端：`1.3.1`。
-- 固定二进制目录：`D:\工具软件\AgentDesktop\1.3.1\`，复制后核对了 SHA-256；实际可执行文件以本机配置的 `desktop.binaryPath` 为准。
-- 本机配置：`C:\Users\30817\AppData\Local\AgentBrowserBridge\automation.json`。
+- 固定二进制目录：`<TOOLS_DIR>\AgentDesktop\1.3.1\`，复制后核对了 SHA-256；实际可执行文件以本机配置的 `desktop.binaryPath` 为准。
+- 本机配置：`%LOCALAPPDATA%\AgentBrowserBridge\automation.json`。
 - 原生状态目录：`%LOCALAPPDATA%\AgentBrowserBridge\desktop-state-v1`，由当前用户持有且使用严格 ACL，避免复用不兼容的旧状态目录。
 
 检查本机配置指向的二进制，再运行统一诊断和组合验收：

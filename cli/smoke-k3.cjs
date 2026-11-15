@@ -144,6 +144,9 @@ async function openFixturePage() {
 }
 
 (async () => {
+  if (!process.env.CDP_HTTP && !process.env.BROWSER_BRIDGE_EXPECT_PROFILE && !process.env.GCWEBAUTO_EXPECT_PROFILE) {
+    try { require('../lib/automation/config').loadLocalConfig(); } catch {}
+  }
   await cdp.identity.verify();
   let browser, targetId, page;
   const t0 = Date.now();
@@ -204,7 +207,7 @@ async function openFixturePage() {
           <table style="border-collapse:collapse;width:400px">
             <tbody>
               <tr data-uid="u1" style="height:28px"><td style="width:32px"><input type="checkbox" style="width:0;height:0;opacity:0"></td><td>张三</td><td>zs</td></tr>
-              <tr data-uid="u2" id="qxRow" style="height:28px"><td id="qxCell" style="width:32px;border:1px solid #ccc"><input type="checkbox" style="width:0;height:0;opacity:0"></td><td><a class="type-link">何齐新</a></td><td>qx.he</td></tr>
+              <tr data-uid="u2" id="qxRow" style="height:28px"><td id="qxCell" style="width:32px;border:1px solid #ccc"><input type="checkbox" style="width:0;height:0;opacity:0"></td><td><a class="type-link">李四</a></td><td>lisi</td></tr>
             </tbody>
           </table>
         </div>
@@ -257,7 +260,7 @@ async function openFixturePage() {
       return true;
     })()`);
 
-    await k3.selectGridRowByText(page, '何齐新', { alsoIncludes: 'qx.he', guard: GUARD });
+    await k3.selectGridRowByText(page, '李四', { alsoIncludes: 'lisi', guard: GUARD });
     assert.equal(await page.evalChecked('window.__adminState.rowChecked'), true, 'must click first non-link cell despite 0-width checkbox');
     assert.equal(await page.evalChecked('window.__adminState.linkOpened'), false, 'must NOT click name hyperlink');
     await k3.clickSplitMenuOption(page, '密码策略', '重置密码', { guard: GUARD });

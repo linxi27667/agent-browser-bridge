@@ -1,13 +1,13 @@
 # 金蝶云星空 (K3Cloud HTML5) 自动化经验笔记
 
-> 2026-11-09 在 `http://10.1.3.38/K3Cloud`（`101 广州高昌`）实机验证；2026-11-11 补充 `cli/abb.cjs` 状态化场景命令与 `notes/admin-console.md`（管理中心 `9232`）。可复用代码在 `tools/k3-actions.cjs`，CLI 入口 `cli/abb.cjs --scene k3` 与 `tools/open-bill.cjs`。
+> 基于金蝶云星空（`http://k3cloud.example.internal/K3Cloud`）实机验证沉淀；补充 `cli/abb.cjs` 状态化场景命令与 `notes/admin-console.md`（管理中心 `9232`）。可复用代码在 `tools/k3-actions.cjs`，CLI 入口 `cli/abb.cjs --scene k3` 与 `tools/open-bill.cjs`。
 
 ## 1. 上下文门禁与会话
 
 - 门禁：`k3.K3_GUARD`（已登录、非登录页、顶部全局搜索存在）。登录页门禁：`!!document.getElementById('btnLogin')`。
-- 打开方式：`withDedicatedTab({ url: 'http://10.1.3.38/K3Cloud' }, fn)`。业务地址默认复用同源标签页，**结束或抛错都不关闭标签页**。
-- 登录：凭据只从 Obsidian `密码簿.md` 读取，不写进脚本或 Git。`#user` 获得焦点时会自动取消选中，`fillNative` 已先清空再输入。
-- 组织：单据属于哪个组织就切到哪个组织再查。`26GC054`（西班牙 FRAIN）及其链路单据都在 **`101 广州高昌`**，在 `102 广州赫力` 下查不到。
+- 打开方式：`withDedicatedTab({ url: 'http://k3cloud.example.internal/K3Cloud' }, fn)`（本机实际地址配置于 `%LOCALAPPDATA%\AgentBrowserBridge\automation.json` 的 `scenes.k3.defaultUrl` 或环境变量 `ABB_K3_URL`）。业务地址默认复用同源标签页，**结束或抛错都不关闭标签页**。
+- 登录：凭据只从外部安全凭据源读取，不写进脚本或 Git。`#user` 获得焦点时会自动取消选中，`fillNative` 已先清空再输入。
+- 组织：单据属于哪个业务组织就切到哪个组织再查；跨组织列表默认互相隔离。
 
 ## 2. 多 Agent 必须串行（“打架”的根因）
 
@@ -30,11 +30,11 @@
 - 只点一次蓝色放大镜 `a.kd-filterquicker-btnSearch-container`。**不要“回车 + 点按钮”**：会连发两次查询，第二次重绘会把刚出现的单号链接销毁，导致点空。
 - 每次查询后等 `.k-loading-image / .k-loading-mask` 消失再读网格或截图，否则截到转圈空表。
 - 查不到时默认直接返回 `found: false`，不自动点“重置”（会改动列表过滤状态，且重置后字段下拉偶发渲染在可视区外）。确认默认方案带日期条件时再传 `{ resetOnMiss: true }`。封装：`k3.filterByBillNo(page, billNo, opts)`。
-- 已关闭（业务关闭）的单据默认不在列表里。11-09 实测：`26GC054` 在销售出库单审核后变为“已关闭”，销售订单列表查不到。此时从下游单据（如发货通知单）用“关联查询 → 上查”取证，可看到源单状态。
+- 已关闭（业务关闭）的单据默认不在列表里。例如销售订单在下游出库单审核后变为“已关闭”，默认列表查不到；此时从下游单据（如发货通知单）用“关联查询 → 上查”取证，可看到源单状态。
 
 ## 5. 打开单据：注意“修改”模式
 
-- 点蓝字单号会按当前用户权限打开，常见标题是 `xxx - 修改`。已审核单据改不了，但**创建/暂存状态的单据以修改模式打开会占用网控锁**，同事再打开会提示“…冲突，请稍候再使用”（11-09 实际撞到胡湘果正在改 `XSCKD040422`）。
+- 点蓝字单号会按当前用户权限打开，常见标题是 `xxx - 修改`。已审核单据改不了，但**创建/暂存状态的单据以修改模式打开会占用网控锁**，其他用户再打开会提示“…冲突，请稍候再使用”。
 - `k3.openBill` 返回 `{ mode, billStatus, conflict, editable }`。`editable === true` 时读完必须 `k3.closeActiveBillTab(page)`；`open-bill` 工具默认自动关闭。
 - 本库从不点保存/提交/审核；关页签遇到“是否保存”一律选“否”。
 - 只读任务一律用 `withDedicatedTab({ url, readOnly: true }, fn)`：点击“保存/提交/审核/删除/下推/业务关闭…”会抛 `READ_ONLY_BLOCKED`，按钮收不到点击。`open-bill` 工具执行期间自动开启。
@@ -44,8 +44,7 @@
 ## 6. 序列号查询
 
 - 入口因单据而异：销售出库单在顶部工具栏直接有“序列号”；生产入库单在“业务操作”下拉里。`k3.openSerialView(page)` 两种都会尝试，并等“查询进度 / 正在取数”结束。
-- 生产订单（如 `MO020234`）没有可用的序列号入口（隐藏页签、菜单里也没有），序列号在入库/出库环节才产生，用生产入库单和销售出库单取证。
-- 11-09 实测：`SCRK00087170` 2 条（`BF-MSL-003/004`）；`XSCKD040422` 17 条。
+- 生产订单（如 `MO000001`）没有可用的序列号入口（隐藏页签、菜单里也没有），序列号在入库/出库环节才产生，用生产入库单（如 `SCRK00000001`）和销售出库单（如 `XSCKD000001`）取证。
 
 ## 7. 截图
 

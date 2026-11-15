@@ -62,7 +62,7 @@ test('withDedicatedTab keeps same-site work serial instead of opening a parallel
   const fakeBrowser = {
     send: async (method, params) => {
       if (method === 'Target.getTargets') {
-        return { targetInfos: [{ targetId: id, type: 'page', title: 'K3Cloud', url: 'http://10.1.3.38/K3Cloud/html5/index.aspx' }] };
+        return { targetInfos: [{ targetId: id, type: 'page', title: 'K3Cloud', url: 'http://k3cloud.example.internal/K3Cloud/html5/index.aspx' }] };
       }
       if (method === 'Target.createTarget') { created.push(params); return { targetId: 'parallel-tab' }; }
       return {};
@@ -74,12 +74,12 @@ test('withDedicatedTab keeps same-site work serial instead of opening a parallel
   };
   try {
     await assert.rejects(
-      conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', onLeased: 'fail' }, async () => {}),
+      conc.withDedicatedTab(fakeBrowser, { url: 'http://k3cloud.example.internal/K3Cloud', onLeased: 'fail' }, async () => {}),
       (e) => e.code === 'CDP_TARGET_LEASED'
     );
     const t0 = Date.now();
     await assert.rejects(
-      conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', leaseWaitMs: 600 }, async () => {}),
+      conc.withDedicatedTab(fakeBrowser, { url: 'http://k3cloud.example.internal/K3Cloud', leaseWaitMs: 600 }, async () => {}),
       (e) => e.code === 'CDP_TARGET_LEASED'
     );
     assert.ok(Date.now() - t0 >= 500, 'default policy must wait for the busy tab before giving up');
@@ -176,7 +176,7 @@ test('a tab already driven by a debugger outside this library is reported (onFor
   const fakeBrowser = {
     send: async (method) => {
       if (method === 'Target.getTargets') {
-        return { targetInfos: [{ targetId: id, type: 'page', title: 'K3Cloud', url: 'http://10.1.3.38/K3Cloud/html5/index.aspx', attached: true }] };
+        return { targetInfos: [{ targetId: id, type: 'page', title: 'K3Cloud', url: 'http://k3cloud.example.internal/K3Cloud/html5/index.aspx', attached: true }] };
       }
       return {};
     },
@@ -186,12 +186,12 @@ test('a tab already driven by a debugger outside this library is reported (onFor
     ready: Promise.resolve(),
   };
   await assert.rejects(
-    conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', onForeignAttach: 'fail' }, async () => {}),
+    conc.withDedicatedTab(fakeBrowser, { url: 'http://k3cloud.example.internal/K3Cloud', onForeignAttach: 'fail' }, async () => {}),
     (e) => e.code === 'CDP_FOREIGN_ATTACHED' && e.targetId === id
   );
   const t0 = Date.now();
   await assert.rejects(
-    conc.withDedicatedTab(fakeBrowser, { url: 'http://10.1.3.38/K3Cloud', onForeignAttach: 'wait', leaseWaitMs: 600 }, async () => {}),
+    conc.withDedicatedTab(fakeBrowser, { url: 'http://k3cloud.example.internal/K3Cloud', onForeignAttach: 'wait', leaseWaitMs: 600 }, async () => {}),
     (e) => e.code === 'CDP_TARGET_LEASED'
   );
   assert.ok(Date.now() - t0 >= 500, "onForeignAttach 'wait' must wait for the external debugger to detach");
@@ -325,7 +325,7 @@ test('v0.7.2: @e1 RefMap serializes across processes and scene presets populate 
   rm.add('e2', 102, 'textbox', '管理员密码', 0, { selector: 'input[type="password"]' });
 
   cdp.saveRefState(9232, 'TAB-ADMIN', {
-    url: 'http://10.1.3.38/k3cloud/html5/index.aspx',
+    url: 'http://k3cloud.example.internal/k3cloud/html5/index.aspx',
     title: '金蝶云星空',
     text: '@e1 [button] "重置密码"\n@e2 [textbox] "管理员密码"',
   }, rm, fakeEnv);
@@ -352,7 +352,7 @@ test('v0.7.2: @e1 RefMap serializes across processes and scene presets populate 
 
 test('v0.7.2: snapshot shortens huge _cnneptstate_ header URLs and diffSnapshots.diff renders clean text', async () => {
   const longToken = 'A'.repeat(400);
-  const rawUrl = `http://10.1.3.38/k3cloud/html5/index.aspx?ud=&_cnneptstate_=${longToken}`;
+  const rawUrl = `http://k3cloud.example.internal/k3cloud/html5/index.aspx?ud=&_cnneptstate_=${longToken}`;
   const fakePage = {
     async evalChecked(expr) {
       if (expr === 'true') return true;

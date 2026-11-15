@@ -208,7 +208,7 @@ test('withDedicatedTab preserves business http(s) tabs by default and reuses exi
       if (method === 'Target.getTargets') {
         return {
           targetInfos: [
-            { targetId: 'existing-k3-tab', type: 'page', title: 'K3Cloud', url: 'http://10.1.3.38/K3Cloud/html5/index.aspx' },
+            { targetId: 'existing-k3-tab', type: 'page', title: 'K3Cloud', url: 'http://k3cloud.example.internal/K3Cloud/html5/index.aspx' },
           ],
         };
       }
@@ -236,7 +236,7 @@ test('withDedicatedTab preserves business http(s) tabs by default and reuses exi
 
   let attachedTargetId = null;
   let wasReused = false;
-  await withDedicatedTab(fakeBrowser, { port: 9224, url: 'http://10.1.3.38/K3Cloud' }, async (page, meta) => {
+  await withDedicatedTab(fakeBrowser, { port: 9224, url: 'http://k3cloud.example.internal/K3Cloud' }, async (page, meta) => {
     attachedTargetId = page.targetId;
     wasReused = meta.reusedExisting;
   });
@@ -287,7 +287,7 @@ test('withLeasedTarget attaches to existing tab by urlIncludes and never closes 
       if (method === 'Target.getTargets') {
         return {
           targetInfos: [
-            { targetId: 'k3-main-tab', type: 'page', title: '金蝶云星空', url: 'http://10.1.3.38/K3Cloud/html5/' },
+            { targetId: 'k3-main-tab', type: 'page', title: '金蝶云星空', url: 'http://k3cloud.example.internal/K3Cloud/html5/' },
           ],
         };
       }
@@ -306,7 +306,7 @@ test('withLeasedTarget attaches to existing tab by urlIncludes and never closes 
   };
 
   let gotId = null;
-  await withLeasedTarget(fakeBrowser, { urlIncludes: '10.1.3.38' }, { port: 9224 }, async (page) => {
+  await withLeasedTarget(fakeBrowser, { urlIncludes: 'k3cloud.example.internal' }, { port: 9224 }, async (page) => {
     gotId = page.targetId;
   });
   assert.equal(gotId, 'k3-main-tab');
