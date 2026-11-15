@@ -151,3 +151,24 @@ test('exclusive wrappers use native launch and close argument contracts', async 
   assert.deepEqual(launch.args, ['launch', process.execPath, '--arg=--test-flag', '--arg=two words']);
   assert.deepEqual((await desktop.adCloseApp('fixture.exe')).args, ['close-app', 'fixture.exe']);
 });
+
+test('shell surfaces are explicit observation scopes and foreground opening stays guarded', async () => {
+  const reader=client();
+  assert.equal((await reader.adSnapshot(undefined,{surface:'taskbar'})).command,'snapshot');
+  await assert.rejects(reader.adSnapshot(undefined,{surface:'window'}),isCode('INVALID_ARGS'));
+  await assert.rejects(reader.adOpenSystemSurface('taskbar'),isCode('READ_ONLY_BLOCKED'));
+  await assert.rejects(client({readOnly:false}).adOpenSystemSurface('system-tray-overflow'),isCode('DESKTOP_FOREGROUND_REQUIRED'));
+  const exclusive=client({readOnly:false,mode:'exclusive'});
+  const opened=await exclusive.adOpenSystemSurface('system-tray-overflow');
+  assert.equal(opened.command,'open-system-surface');
+  assert.ok(opened.args.includes('--headed'));
+  await assert.rejects(exclusive.adOpenSystemSurface('desktop'),isCode('INVALID_ARGS'));
+});
+
+test('window restoration requires an explicit target and writable exclusive mode', async () => {
+  await assert.rejects(client().adRestoreWindow(undefined,{windowId:'w-123'}),isCode('READ_ONLY_BLOCKED'));
+  await assert.rejects(client({readOnly:false}).adRestoreWindow(undefined,{windowId:'w-123'}),isCode('DESKTOP_FOREGROUND_REQUIRED'));
+  const desktop=client({readOnly:false,mode:'exclusive'});
+  await assert.rejects(desktop.adRestoreWindow(),isCode('INVALID_ARGS'));
+  assert.equal((await desktop.adRestoreWindow(undefined,{windowId:'w-123'})).command,'restore');
+});

@@ -73,7 +73,7 @@ test('the unified browser cannot disable target lease renewal', async () => {
 test('cooperative browser refuses every physical or capture facade before backend invocation', async () => {
   const api = createAutomation({ readOnly: false }, dependencies());
   await api.browser.withDedicatedTab({ url: 'about:blank' }, async page => {
-    for (const name of ['clickByBox', 'dragByBox', 'pressKey', 'capturePagePng', 'captureUniquePng']) {
+    for (const name of ['clickByBox', 'dragByBox', 'capturePagePng', 'captureUniquePng']) {
       await assert.rejects(page[name]('#fixture', 'true'), { code: 'FOREGROUND_REQUIRED' });
     }
   });

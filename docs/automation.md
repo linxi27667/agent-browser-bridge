@@ -47,11 +47,11 @@ node cli/agent.cjs run --file .\reviewed-workflow.cjs
 | --- | --- | --- | --- |
 | 版本、状态、目标快照、属性读取 | 允许 | 允许 | 允许 |
 | 语义点击、`set-value` 等变更 | 拒绝 | 允许支持的操作 | 允许支持的操作 |
-| `type`、`press`、物理鼠标、主动聚焦 | 拒绝 | 拒绝 | 允许支持的操作 |
+| 桌面 `type`、`press`、物理鼠标、主动聚焦或恢复窗口 | 拒绝 | 拒绝 | 允许支持的操作 |
 | 剪贴板写入、启动/关闭应用 | 拒绝 | 拒绝 | 允许支持的操作 |
 | 未知命令、任意 batch/mcp/sandbox 转发 | 拒绝 | 拒绝 | 拒绝 |
 
-浏览器 facade 同样区分语义操作与物理操作，截图等可能激活目标的操作需要 exclusive。即使 CDP 不移动系统鼠标，激活标签页或应用自己的弹窗仍可能影响前台。
+浏览器页内 `pressKey('Enter'|'Tab'|'Escape', guard)` 与 `hover(selector, guard)` 通过 CDP 只发送到租约页面，允许在可写 cooperative 模式下执行，并使用端口锁串行。它们不发送 Windows 全局按键、不移动系统鼠标；桌面 `adPress` 仍需 exclusive。截图等可能激活目标的操作需要 exclusive；应用自己的弹窗也可能影响前台。
 
 合作模式限制本入口已知的操作路径，不是操作系统隔离。exclusive 工作流锁只协调参与此桥接的进程，不能阻止人或其他工具输入，不能代替浏览器页签租约与同站同账号的业务串行。
 
@@ -82,6 +82,8 @@ console.log(snapshot.ref_count);
 `adRaw(args, options)` 只转发已支持且参数通过校验的命令，遵守同一策略，不是任意子进程执行器。`--force` 等绕过选项不受支持。坐标点击另需 `windowId`，并检查窗口当前聚焦及坐标位于其范围内；检查与输入之间仍有状态变化窗口，不能把它等同于语义引用的重新标识保证。
 
 坐标输入的 JavaScript 形式是 `adMouseClick(x, y, {windowId})`；CLI 用任务选项 `--target-window w-...` 传递预检窗口，不把它作为原生 `mouse-click` 参数。两种形式都需要明确的可写 exclusive 任务。
+
+最小化窗口先用 `adRestoreWindow(undefined, {windowId})` 恢复，再通过 `adListWindows()` 确认 `minimized: false` 与实际焦点；不要把任务栏按钮成功返回当作恢复证明，也不要反复点击导致窗口再次最小化。`adOpenSystemSurface(surface)` 支持 `taskbar`、`system-tray`、`system-tray-overflow`、`start-menu`、`action-center`，同样需要可写 exclusive；读取这些区域可用 `adSnapshot(undefined, {surface})`。普通窗口快照仍须明确应用、窗口 ID 或根引用。
 
 ## 5. 工作流与验收
 
@@ -139,6 +141,8 @@ const report = await runWorkflow(async function ({ desktop, step }) {
 ```powershell
 npm test
 npm run smoke:workflow
+# 合成复杂网页任务：需要已配置的专用调试浏览器，无外网依赖
+npm run bench:browser
 # 会打开独立测试窗口，可能取得前台焦点：
 npm run test:desktop
 ```
@@ -177,3 +181,13 @@ npm run smoke:workflow
 四步均为 `verified`，原生赋值报告 `delivered_verified`，使用 `cooperative` 模式，物理输入命令数为 `0`。该次核心工作流耗时为 `1386ms`；它不包含所有启动准备耗时，也不表示其他应用或业务流程能达到相同速度。
 
 本机原始报告在 `artifacts/workflow-smoke/run-lVkNAN/report.json`。`artifacts/` 为忽略的运行产物，报告不随 Git 分发；换机后用相同命令生成新报告。该结果证明两套后端和文件步骤能在隔离场景闭环，未对微信、金蝶或税务业务进行正式验收。
+
+## 9. 复杂网页基准与真实应用测试的区别
+
+`npm run bench:browser` 使用已配置的专用调试浏览器，新建自己的 `about:blank`，装入仓内 `tests/fixtures/luna-browser-benchmark.html`。该页面只有合成数据，模拟 160ms 异步查询，无外网依赖；不会操作既有业务标签。动作全部经过可写 cooperative 工作流，准备 fixture 的原始 CDP 操作只限该自建页面。
+
+每轮包含 23 个验收步骤、15 次改变页面状态的交互：填写中文、筛选、排序并核对首行、分页勾选、核对确认弹窗、生成批次、读取 CSV。独立数据校验确认 4 单、9 件、1768 元。报告写入被忽略的 `artifacts/luna-browser-benchmark/report.json`；结束时只关闭自己创建且仍是 `about:blank` 的页面。
+
+2026年11月15日本机由 Luna Agent 执行的最终三轮均为 23/23 `verified`，0 失败；冷准备 1616ms，三轮脚本执行分别为 571/967/986ms，轮间 fixture 重置为 0/7/8ms。执行时间包含动作与验收，不包含 Agent 阅读、编写、审查和修复所用的墙钟时间，也不能推导有外网、登录或复杂业务系统的速度。
+
+同日还在公开 TodoMVC 示例页完成创建、勾选、筛选与逐项删除，最终独立读取确认为 0 条，HTTP 标签保留。首次探测到独立空列表回读约 19 分 41 秒，含 9 次失败或未验收的工作流尝试、1 次只读探针错误及一次修复前的模式停步。原因包括错误选择器、隐藏行仍出现在快照中而导致筛选断言不适用、删除按钮需要悬停；修正后从已观察状态接续，未自动重试。最后的清理工作流 7/7 verified、15192ms，包含三次各约 5 秒的删除，不是整个探索任务耗时。真实微信的自绘界面在本机未提供有效 UIA 控件；该类任务需要额外定位与前台协调，应与合成网页成绩分别记录。

@@ -16,7 +16,8 @@
     "agent": "node cli/agent.cjs",
     "doctor": "node cli/agent.cjs doctor",
     "smoke:workflow": "node cli/smoke-workflow.cjs",
-    "test:desktop": "node scripts/test-desktop.cjs"
+    "test:desktop": "node scripts/test-desktop.cjs",
+    "bench:browser": "node scripts/luna-browser-benchmark.cjs"
   },
   "dependencies": {
     "ws": "^8.18.0"

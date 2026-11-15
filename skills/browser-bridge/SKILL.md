@@ -31,6 +31,8 @@ const snapshot = await desktop.adSnapshot('notepad.exe');
 
 Every `ad*` method returns a Promise: always `await` it, including in `cli/run.cjs`. Use `adSetValue` for semantic text assignment after explicitly allowing the write. `adType`, `adPress`, pointer input, focus, lifecycle operations, and clipboard writes affect shared resources and require exclusive mode. Text goes through stdin. `adRaw` applies the same command/argument policy, not an arbitrary escape hatch.
 
+Browser facade `pressKey` (Enter/Tab/Escape) and `hover(selector, guard)` address only the leased page through CDP; writable cooperative mode keeps port serialization without OS input or tab activation. Desktop keys remain exclusive. For a minimized desktop window use `adRestoreWindow(undefined, {windowId})`, then verify window state. `adOpenSystemSurface(surface)` opens an explicitly supported shell area in writable exclusive mode; `adSnapshot(undefined, {surface})` can observe it. Never infer foreground restoration from a successful taskbar-button action alone.
+
 Keep refs unchanged: desktop snapshot-qualified refs such as `'@snapshot:e1'` cannot replace browser `@e1`. Refresh stale or ambiguous observations. A successful dispatch is not a verified task result; use `step(name, run, verify)` with a task-specific postcondition. Only a verifier returning exactly `true` marks a step verified.
 
 Never automatically retry unknown, uncertain, or unverified delivery. Inspect current state first. Exclusive workflow locks only coordinate participating processes; they do not stop a human, unrelated tools, or an application's own popups, and do not replace browser leases or same-account business serialization.

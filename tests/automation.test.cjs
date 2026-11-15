@@ -90,6 +90,7 @@ test('read-only browser blocks mutators and task policy cannot be weakened by le
   const api = createAutomation({}, dependencies());
   await api.browser.withDedicatedTab({ url: 'about:blank' }, async page => {
     await assert.rejects(page.fillNative('#value', 'new value', 'true'), { code: 'READ_ONLY_BLOCKED' });
+    await assert.rejects(page.pressKey('Enter', 'true'), { code: 'READ_ONLY_BLOCKED' });
   });
   for (const override of [{ readOnly: false }, { activate: true }, { autoUiLock: false }, { keepOpen: false }, { port: 9222 }, { onLeased: 'newTab' }]) {
     await assert.rejects(api.browser.withDedicatedTab({ url: 'about:blank', ...override }, async () => {}), { code: 'POLICY_DENIED' });
@@ -233,4 +234,29 @@ test('CLI help, route, invalid options and workflow results have predictable exi
   const unverified = run(['run', '--file', filename]);
   assert.equal(unverified.status, 2, unverified.stdout + unverified.stderr);
   assert.equal(JSON.parse(unverified.stdout).report.status, 'unverified');
+});
+
+test('cooperative page keys keep port serialization and never activate the target', async () => {
+  const deps = dependencies();
+  deps.cdp.pressKey = async (page, key, guard) => {
+    deps.calls.push({kind:'page-key', autoUiLock:page.autoUiLock, key, guard});
+    return {pressed:true,key};
+  };
+  const api = createAutomation({readOnly:false}, deps);
+  await api.browser.withLeasedTarget({id:'fixture-id'}, async page => {
+    assert.equal((await page.pressKey('Enter','fixtureGuard')).pressed,true);
+  });
+  assert.ok(deps.calls.some(c => c.kind === 'ui-lock'));
+  assert.deepEqual(deps.calls.find(c => c.kind === 'page-key'), {kind:'page-key',autoUiLock:false,key:'Enter',guard:'fixtureGuard'});
+  assert.equal(deps.calls.find(c => c.kind === 'leased').options.activate,false);
+});
+
+test('cooperative hover stays in the leased page and preserves read-only protection', async () => {
+  const deps=dependencies();
+  let sent;
+  deps.cdp.buildFindElementsExpression=(_page,selector)=>'document.querySelectorAll('+JSON.stringify(selector)+')';
+  deps.cdp.withDedicatedTab=async(options,run)=>run({port:9229,autoUiLock:options.autoUiLock,evalChecked:async expression=>expression.includes('getBoundingClientRect')?{x:10,y:20}:true,send:async(method,args)=>{sent={method,args};}});
+  await createAutomation({readOnly:false},deps).browser.withDedicatedTab({url:'about:blank'},async page=>{assert.equal((await page.hover('.todo-list li','fixtureGuard')).hovered,true);});
+  assert.deepEqual(sent,{method:'Input.dispatchMouseEvent',args:{type:'mouseMoved',x:10,y:20,button:'none'}});
+  await createAutomation({},deps).browser.withDedicatedTab({url:'about:blank'},async page=>{await assert.rejects(page.hover('.todo-list li','fixtureGuard'),{code:'READ_ONLY_BLOCKED'});});
 });

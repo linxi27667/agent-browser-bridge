@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Luna Bench - Expense Approvals</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 28px; color: #17212b; }
+    label { display: inline-block; margin: 8px 16px 8px 0; }
+    input, select, button, textarea { font: inherit; padding: 7px; }
+    table { border-collapse: collapse; margin-top: 16px; min-width: 820px; }
+    th, td { border: 1px solid #9aa8b5; padding: 8px 12px; text-align: left; }
+    button { margin: 6px; }
+    [hidden] { display: none !important; }
+    #modal { border: 2px solid #506273; background: #f1f6fa; padding: 16px; margin: 18px 0; width: 500px; }
+    #exportText { display: block; width: 820px; height: 110px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main id="expense-app" data-benchmark="luna-v1">
+    <h1>差旅费用批次审批</h1>
+    <p>选择报销条件，核对明细后生成审批批次并导出清单。</p>
+    <form id="filters">
+      <label>申请人 <input id="applicant" aria-label="申请人" value=""></label>
+      <label>部门
+        <select id="department" aria-label="部门">
+          <option value="">全部部门</option><option value="研发部">研发部</option><option value="行政部">行政部</option>
+        </select>
+      </label>
+      <label>状态
+        <select id="status" aria-label="审批状态">
+          <option value="">全部状态</option><option value="待审批">待审批</option><option value="已审批">已审批</option>
+        </select>
+      </label>
+      <label><input id="hasReceipt" type="checkbox">仅显示有合规票据</label>
+      <button id="search" type="submit">查询费用</button>
+    </form>
+    <p id="summary" aria-live="polite">请先设置查询条件</p>
+    <table aria-label="报销明细">
+      <thead><tr><th>选择</th><th>报销单号</th><th>申请人</th><th>部门</th><th>状态</th><th>数量</th><th>单价（元）</th><th>金额（元）</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8">尚未查询</td></tr></tbody>
+    </table>
+    <button id="sortAmount" type="button">按金额升序</button><button id="clearSort" type="button">清除排序</button>
+    <nav aria-label="分页"><button id="previous" type="button" disabled>上一页</button><span id="pageLabel">第 0 页</span><button id="next" type="button" disabled>下一页</button></nav>
+    <button id="makeBatch" type="button">创建审批批次</button>
+    <section id="modal" role="dialog" aria-modal="true" aria-label="确认批次" hidden>
+      <h2>确认批次内容</h2>
+      <p>选择数量：<output id="modalCount">0</output></p>
+      <p>合计数量：<output id="modalQty">0</output></p>
+      <p>合计金额：<output id="modalAmount">0.00</output> 元</p>
+      <button id="cancel" type="button">返回修改</button><button id="confirm" type="button">确认生成批次</button>
+    </section>
+    <p id="result" aria-live="polite">批次尚未生成</p>
+    <button id="export" type="button" disabled>导出审批清单</button>
+    <textarea id="exportText" aria-label="导出文件回读内容" readonly hidden></textarea>
+  </main>
+  <script>
+    (() => {
+      const records = [
+        {id:'BX-26015', applicant:'测试申请人甲', department:'研发部', status:'待审批', qty:2, price:120, receipt:true},
+        {id:'BX-26016', applicant:'测试申请人甲', department:'行政部', status:'待审批', qty:3, price:45, receipt:true},
+        {id:'BX-26017', applicant:'测试申请人甲', department:'研发部', status:'待审批', qty:1, price:800, receipt:true},
+        {id:'BX-26018', applicant:'测试申请人甲', department:'研发部', status:'已审批', qty:4, price:20, receipt:true},
+        {id:'BX-26019', applicant:'测试申请人甲', department:'研发部', status:'待审批', qty:2, price:300, receipt:false},
+        {id:'BX-26020', applicant:'测试申请人甲', department:'研发部', status:'待审批', qty:4, price:32, receipt:true},
+        {id:'BX-26021', applicant:'测试申请人甲', department:'研发部', status:'待审批', qty:2, price:300, receipt:true}
+      ];
+      const selected = new Set();
+      let filtered = [], baseFiltered = [], page = 0, batch = null;
+      const pageSize = 2;
+      const $ = id => document.getElementById(id);
+      const amount = row => row.qty * row.price;
+      function render() {
+        const body = $('rows'); body.replaceChildren();
+        const start = page * pageSize;
+        for (const row of filtered.slice(start, start + pageSize)) {
+          const tr = document.createElement('tr'); tr.id = 'row-' + row.id;
+          const fields = [
+            `<input type="checkbox" id="pick-${row.id}" aria-label="选择 ${row.id}" ${selected.has(row.id) ? 'checked' : ''}>`,
+            row.id, row.applicant, row.department, row.status, String(row.qty), row.price.toFixed(2), amount(row).toFixed(2)
+          ];
+          fields.forEach((value, index) => { const td = document.createElement('td'); if (index === 0) td.innerHTML = value; else td.textContent = value; tr.append(td); });
+          body.append(tr);
+          $('pick-' + row.id).addEventListener('change', event => event.target.checked ? selected.add(row.id) : selected.delete(row.id));
+        }
+        const pageCount = Math.ceil(filtered.length / pageSize);
+        $('pageLabel').textContent = `第 ${filtered.length ? page + 1 : 0} 页 / 共 ${pageCount} 页`;
+        $('previous').disabled = page <= 0; $('next').disabled = page + 1 >= pageCount;
+      }
+      $('filters').addEventListener('submit', event => {
+        event.preventDefault();
+        $('search').disabled = true; $('summary').textContent = '正在查询…';
+        setTimeout(() => {
+          baseFiltered = records.filter(r => r.applicant.includes($('applicant').value.trim()) &&
+            (!$('department').value || r.department === $('department').value) &&
+            (!$('status').value || r.status === $('status').value) &&
+            (!$('hasReceipt').checked || r.receipt));
+          filtered = baseFiltered.slice(); selected.clear(); page = 0; render();
+          $('summary').textContent = `查询完成：${filtered.length} 条费用记录`;
+          $('search').disabled = false;
+        }, 160);
+      });
+      $('sortAmount').addEventListener('click', () => { filtered = baseFiltered.slice().sort((a,b) => amount(a) - amount(b)); page = 0; render(); });
+      $('clearSort').addEventListener('click', () => { filtered = baseFiltered.slice(); page = 0; render(); });
+      $('next').addEventListener('click', () => { page += 1; render(); });
+      $('previous').addEventListener('click', () => { page -= 1; render(); });
+      $('makeBatch').addEventListener('click', () => {
+        const picked = filtered.filter(r => selected.has(r.id));
+        const totalQty = picked.reduce((n, r) => n + r.qty, 0);
+        const totalAmount = picked.reduce((n, r) => n + amount(r), 0);
+        $('modalCount').textContent = String(picked.length);
+        $('modalQty').textContent = String(totalQty);
+        $('modalAmount').textContent = totalAmount.toFixed(2);
+        $('modal').hidden = false;
+      });
+      $('cancel').addEventListener('click', () => { $('modal').hidden = true; });
+      $('confirm').addEventListener('click', () => {
+        const picked = filtered.filter(r => selected.has(r.id));
+        batch = {picked, totalQty:picked.reduce((n,r)=>n+r.qty,0), totalAmount:picked.reduce((n,r)=>n+amount(r),0)};
+        $('modal').hidden = true;
+        $('result').textContent = `批次审批-20261115-001 已生成：${picked.length} 单，${batch.totalQty} 件，${batch.totalAmount.toFixed(2)} 元`;
+        $('export').disabled = false;
+      });
+      $('export').addEventListener('click', () => {
+        if (!batch) return;
+        const lines = ['单号,申请人,部门,数量,单价,金额'];
+        for (const row of batch.picked) lines.push([row.id,row.applicant,row.department,row.qty,row.price.toFixed(2),amount(row).toFixed(2)].join(','));
+        lines.push(`合计,,,${batch.totalQty},,${batch.totalAmount.toFixed(2)}`);
+        $('exportText').value = lines.join('\n'); $('exportText').hidden = false;
+      });
+    })();
+  </script>
+</body>
+</html>
