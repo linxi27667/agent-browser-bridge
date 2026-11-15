@@ -16,14 +16,19 @@ if (!manifestOnly && !fs.existsSync(DST)) {
 }
 const SHARED = [
   'lib/cdp/advanced.js',
+  'lib/cdp/element-ui.js',
   'lib/cdp/locator.js',
   'lib/cdp/runner.js',
+  'lib/cdp/scene.js',
   'lib/cdp/snapshot.js',
   'learnings/etax-gd',
   'learnings/k3cloud',
+  'learnings/lceda',
   'tests/hardening.test.cjs',
   'tests/egolite.test.cjs',
   'tests/shared-sync.test.cjs',
+  'cli/abb.cjs',
+  'cli/run.cjs',
   'cli/smoke-k3.cjs',
 ];
 

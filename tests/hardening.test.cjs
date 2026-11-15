@@ -198,3 +198,188 @@ test('a tab already driven by a debugger outside this library is reported (onFor
   const again = conc.acquireTargetLease({ targetId: id, heartbeat: false });
   again.release();
 });
+
+test('v0.7.2: clickByBox skips parkPointer on popup/split-button triggers to prevent self-closing menus', async () => {
+  const mouse = [];
+  const popupPage = {
+    async evalChecked(expr) {
+      if (expr.includes('getBoundingClientRect')) {
+        return { x: 200, y: 80, width: 24, height: 24, isPopupTrigger: true };
+      }
+      return true;
+    },
+    async send(method, params) {
+      if (method === 'Input.dispatchMouseEvent') mouse.push(params);
+      return {};
+    },
+    async eval() { return { result: { value: true } }; },
+  };
+  const res = await cdp.clickByBox(popupPage, '.k-i-arrow-s', 'true', { parkPointer: true });
+  assert.equal(res.parked, false);
+  assert.deepEqual(mouse.map((m) => m.type), ['mouseMoved', 'mousePressed', 'mouseReleased']);
+
+  mouse.length = 0;
+  const forced = await cdp.clickByBox(popupPage, '.k-i-arrow-s', 'true', { parkPointer: true, forceParkPointer: true });
+  assert.equal(forced.parked, true);
+  assert.equal(mouse.length, 4);
+});
+
+test('v0.7.2: fillNative dispatches physical click + blur inside modals and typeKeysSafe never double-types', async () => {
+  const events = [];
+  let sawBlurExpr = false;
+  const modalPage = {
+    async evalChecked(expr) {
+      if (expr === 'true') return true;
+      if (expr.includes('inModal')) {
+        return { ok: true, inModal: true, x: 320, y: 260, w: 200, h: 32 };
+      }
+      if (expr.includes('FocusEvent') || expr.includes('"focusout"')) {
+        sawBlurExpr = expr.includes('true');
+        return 'Sec#2026';
+      }
+      return true;
+    },
+    async send(method, params) {
+      events.push({ method, params });
+      return {};
+    },
+    async eval() { return { result: { value: true } }; },
+  };
+  const fillRes = await cdp.fillNative(modalPage, 'input[type="password"]', 'Sec#2026', 'true');
+  assert.equal(fillRes.inputVerified, true);
+  assert.equal(fillRes.blurred, true);
+  assert.equal(sawBlurExpr, true);
+  const mouseClicks = events.filter((e) => e.method === 'Input.dispatchMouseEvent');
+  assert.deepEqual(mouseClicks.map((m) => m.params.type), ['mouseMoved', 'mousePressed', 'mouseReleased']);
+  assert.equal(mouseClicks[1].params.x, 320);
+
+  const keyEvents = [];
+  const typedChunks = [];
+  const keyPage = {
+    async evalChecked(expr) {
+      if (expr === 'true') return true;
+      if (expr.includes('inModal')) return { ok: true, inModal: false, x: 50, y: 50, w: 120, h: 28 };
+      if (expr.includes('Input changed before readback')) return typedChunks.join('');
+      return true;
+    },
+    async send(method, params) {
+      if (method === 'Input.dispatchKeyEvent') keyEvents.push(params);
+      if (method === 'Input.insertText') typedChunks.push(params.text);
+      return {};
+    },
+    async eval() { return { result: { value: true } }; },
+  };
+  const typeRes = await cdp.typeKeysSafe(keyPage, '#pwd', 'Ab1!', 'true', { physicalFocus: false });
+  assert.equal(typeRes.typedLength, 4);
+  assert.equal(typedChunks.join(''), 'Ab1!');
+  assert.ok(keyEvents.every((k) => k.type !== 'char' && k.text === undefined), 'must never send text on keyDown or char events');
+});
+
+test('v0.7.2: saveScreenshot activates target even without autoUiLock and direct page WS records targetId/port', async () => {
+  const activated = [];
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
+  const bgPage = {
+    targetId: 'BG-TAB-9232',
+    port: 9232,
+    autoUiLock: false,
+    browser: {
+      async send(method, params) {
+        if (method === 'Target.activateTarget') activated.push(params.targetId);
+        return {};
+      },
+    },
+    async evalChecked() { return null; },
+    async send(method) {
+      if (method === 'Page.captureScreenshot') return { data: png };
+      return {};
+    },
+  };
+  const saved = await cdp.saveScreenshot(bgPage, 'bg-test', { dir: lockDir });
+  assert.deepEqual(activated, ['BG-TAB-9232']);
+  assert.ok(fs.existsSync(saved));
+
+  const { WebSocketServer } = require('ws');
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise((r) => wss.once('listening', r));
+  const wsPort = wss.address().port;
+  const direct = cdp.createCdp(`ws://127.0.0.1:${wsPort}/devtools/page/DIRECT-PAGE-ID`, { skipLeaseCheck: true });
+  try {
+    await direct.ready;
+    assert.equal(direct.targetId, 'DIRECT-PAGE-ID');
+    assert.equal(direct.port, wsPort);
+  } finally {
+    direct.close();
+    wss.close();
+  }
+});
+
+test('v0.7.2: @e1 RefMap serializes across processes and scene presets populate strict env safely', () => {
+  const stateDir = path.join(lockDir, 'state');
+  const fakeEnv = {
+    LOCALAPPDATA: path.join(lockDir, 'LocalAppData'),
+    BROWSER_BRIDGE_STATE_DIR: stateDir,
+  };
+  const { RefMap } = require('../lib/cdp/locator');
+  const rm = new RefMap();
+  rm.add('e1', 101, 'button', '重置密码', 0, { selector: 'button.reset-pwd' });
+  rm.add('e2', 102, 'textbox', '管理员密码', 0, { selector: 'input[type="password"]' });
+
+  cdp.saveRefState(9232, 'TAB-ADMIN', {
+    url: 'http://10.1.3.38/k3cloud/html5/index.aspx',
+    title: '金蝶云星空',
+    text: '@e1 [button] "重置密码"\n@e2 [textbox] "管理员密码"',
+  }, rm, fakeEnv);
+
+  const loaded = cdp.loadRefState(9232, 'TAB-ADMIN', {}, fakeEnv);
+  assert.ok(loaded);
+  const freshClient = {};
+  loaded.hydrate(freshClient);
+  assert.equal(freshClient._refMap.get(1).name, '重置密码');
+  assert.equal(freshClient._refMap.get('e2').selector, 'input[type="password"]');
+
+  const applied = cdp.applySceneToEnv({ scene: 'k3-admin' }, fakeEnv);
+  assert.equal(applied.port, 9232);
+  assert.equal(applied.browser, 'edge');
+  assert.equal(fakeEnv.BROWSER_BRIDGE_EXPECT_PORT, '9232');
+  assert.equal(fakeEnv.GCWEBAUTO_EXPECT_PORT, '9232');
+  assert.equal(fakeEnv.BROWSER_BRIDGE_REQUIRE_INSTANCE, '1');
+  assert.equal(fakeEnv.GCWEBAUTO_REQUIRE_INSTANCE, '1');
+
+  const dailyEdge = path.join(fakeEnv.LOCALAPPDATA, 'Microsoft', 'Edge', 'User Data', 'Default');
+  assert.equal(cdp.scene.isDailyUserProfile(dailyEdge, fakeEnv), true);
+  assert.equal(cdp.scene.isDailyUserProfile(applied.profile, fakeEnv), false);
+});
+
+test('v0.7.2: snapshot shortens huge _cnneptstate_ header URLs and diffSnapshots.diff renders clean text', async () => {
+  const longToken = 'A'.repeat(400);
+  const rawUrl = `http://10.1.3.38/k3cloud/html5/index.aspx?ud=&_cnneptstate_=${longToken}`;
+  const fakePage = {
+    async evalChecked(expr) {
+      if (expr === 'true') return true;
+      return {
+        url: rawUrl,
+        title: '金蝶云星空',
+        lines: [
+          '[ActiveModal] "重置用户密码 - 修改"',
+          '[ModalBody] "密码即将修改，请确认！ 是 否"',
+          '- button "是" [ref=e1]',
+        ],
+        refs: [{ refId: 'e1', role: 'button', name: '是', selector: '[data-abb-ref="e1"]' }],
+      };
+    },
+  };
+  const snapBefore = await cdp.snapshot(fakePage, 'true');
+  assert.equal(snapBefore.url, rawUrl, 'raw SnapshotResult.url stays intact');
+  assert.ok(snapBefore.text.includes('[400chars]'), 'display header shortens 400-char _cnneptstate_ parameter');
+  assert.ok(!snapBefore.text.includes(longToken), 'display header omits full 400-char token');
+
+  const afterText = snapBefore.text
+    .replace('[ModalBody] "密码即将修改，请确认！ 是 否"', '[ModalBody] "确定 取消 新密码 *"')
+    .replace('\n- button "是" [ref=e1]', '\n- button "取消" [ref=e1]');
+  const diffRes = cdp.diffSnapshots(snapBefore.text, afterText);
+  const rendered = typeof diffRes === 'string' ? diffRes : String(diffRes?.diff || '(no changes)');
+  assert.equal(diffRes.changed, true);
+  assert.ok(!rendered.includes('[object Object]'));
+  assert.ok(rendered.includes('- [ModalBody] "密码即将修改，请确认！ 是 否"'));
+  assert.ok(rendered.includes('+ [ModalBody] "确定 取消 新密码 *"'));
+});

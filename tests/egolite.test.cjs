@@ -181,6 +181,16 @@ test('learnings engine validates site manifests, matches URLs, and runs site too
   assert.equal(etaxSite.site, 'etax-gd');
   assert.ok(etaxSite.noteContents['notes/invoice-query.md'].includes('TDesign'));
 
+  const lcedaSite = cdp.loadSiteLearning('https://pro.lceda.cn/editor');
+  assert.ok(lcedaSite);
+  assert.equal(lcedaSite.site, 'lceda');
+  assert.ok(lcedaSite.noteContents['notes/workflow.md'].includes('DOM.setFileInputFiles'));
+
+  const lcedaSpec = cdp.resolveScene({ scene: 'lceda' });
+  assert.equal(lcedaSpec.scene, 'lceda');
+  assert.equal(lcedaSpec.urlIncludes, 'lceda.cn');
+  assert.ok(lcedaSpec.defaultGuard.includes('lceda.cn'));
+
   const fakePage = {
     evalChecked: async () => ({
       totalCount: 1,

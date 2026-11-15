@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-// AgentBrowserBridge - Code-First 批量执行器 CLI (cli/run.cjs)
+// AgentBrowserBridge / GcWebAuto - Code-First 批量执行器 CLI (cli/run.cjs)
 // 用法：
-//   node cli/run.cjs --code "return await cdp.listSiteLearnings()"
-//   node cli/run.cjs --file path/to/snippet.js
-//   Get-Content snippet.js | node cli/run.cjs
+//   node cli/run.cjs --scene k3 --code "return await cdp.listTargets()"
+//   node cli/run.cjs --scene k3-admin --file path/to/snippet.js
+//   Get-Content snippet.js | node cli/run.cjs --scene k3
 //   node cli/run.cjs --validate-learnings
 
 const fs = require('node:fs');
 const path = require('node:path');
-const cdp = require('../lib/cdp');
+const sceneMod = require('../lib/cdp/scene');
 
 function parseArgs(argv) {
   const args = {
+    scene: '',
+    port: 0,
     code: '',
     file: '',
     validateLearnings: false,
@@ -20,7 +22,11 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--code' || arg === '-e') {
+    if (arg === '--scene' || arg === '-s') {
+      args.scene = argv[++i] || '';
+    } else if (arg === '--port' || arg === '-p') {
+      args.port = Number(argv[++i]) || 0;
+    } else if (arg === '--code' || arg === '-e') {
       args.code = argv[++i] || '';
     } else if (arg === '--file' || arg === '-f') {
       args.file = argv[++i] || '';
@@ -46,6 +52,23 @@ async function readStdin() {
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  if (
+    !parsed.validateLearnings
+    && !parsed.listLearnings
+    && fs.existsSync(path.join(__dirname, 'agent.cjs'))
+    && !process.env.NODE_TEST_CONTEXT
+    && process.env.ABB_QUIET_LEGACY !== '1'
+  ) {
+    process.stderr.write('[legacy-cli] Prefer unified entry "node cli/agent.cjs run --file <workflow.cjs>" (enforces step postcondition verifiers, policy, and exclusive locks; set ABB_QUIET_LEGACY=1 to silence).\n');
+  }
+  if (parsed.scene || parsed.port) {
+    sceneMod.applySceneToEnv({
+      scene: parsed.scene || undefined,
+      port: parsed.port || undefined,
+    });
+  }
+  const cdp = require('../lib/cdp');
+
   if (parsed.validateLearnings) {
     const report = cdp.validateSiteLearnings();
     console.log(JSON.stringify(report, null, 2));
@@ -66,7 +89,7 @@ async function main() {
     code = await readStdin();
   }
   if (!code || !code.trim()) {
-    console.error('Usage: node cli/run.cjs --code "<async js>" | --file <file.js> | --validate-learnings');
+    console.error('Usage: node cli/run.cjs [--scene <name>] --code "<async js>" | --file <file.js> | --validate-learnings');
     process.exit(1);
   }
 
@@ -80,5 +103,5 @@ async function main() {
 
 main().catch((err) => {
   console.error(err && err.stack ? err.stack : String(err));
-  process.exit(1);
+  process.exitCode = 1;
 });

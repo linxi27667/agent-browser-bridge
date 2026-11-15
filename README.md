@@ -10,13 +10,19 @@ The browser engine remains JavaScript/Node.js; the optional native desktop engin
 
 ```powershell
 node cli/agent.cjs --help
-node cli/agent.cjs doctor --expected-version 1.3.1
+node cli/agent.cjs doctor
 node cli/agent.cjs route --url https://example.com
-node cli/agent.cjs desktop snapshot --app notepad.exe
+node cli/agent.cjs browser scenes
+node cli/agent.cjs --scene smoke browser snap --open-url https://example.com
+node cli/agent.cjs --write --scene smoke browser hover-click ".todo-list li" "button.destroy"
+node cli/agent.cjs desktop capabilities --app notepad.exe
+node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app notepad.exe
+node cli/agent.cjs --write desktop deliver --stdin
+node cli/agent.cjs --write --mode exclusive desktop batch --stdin
 node cli/agent.cjs run --file .\my-reviewed-workflow.cjs
 ```
 
-After installation, `npm run agent -- <command>` invokes the same entry. `npm test` runs without visible desktop fixtures; `npm run test:desktop` explicitly enables the isolated GUI checks and can take focus. `npm run smoke:workflow` checks the combined workflow against isolated fixtures without physical input. Report each result separately; fixture success does not establish correctness in an untested business application.
+`node cli/agent.cjs` (`npm run agent -- <command>`) is the **single canonical CLI** for both browser and desktop tasks. Legacy `cli/abb.cjs` and `cli/run.cjs` remain only for `GcWebAuto` shared-file compatibility and print a redirect notice when `cli/agent.cjs` is present; legacy PowerShell desktop helpers (`invokeNamedButton`, `focusNamedWindow`, `sendKeysToNamedWindow`, `captureNamedWindow`) throw `LEGACY_INTERFACE_DISABLED` by default outside isolated GUI tests. `npm test` runs without visible desktop fixtures; `npm run test:desktop` explicitly enables the isolated GUI checks and can take focus. `npm run smoke:workflow` checks the combined workflow against isolated fixtures without physical input. Report each result separately; fixture success does not establish correctness in an untested business application.
 
 The new entry defaults to read-only cooperative operation. `--write` allows supported changes; known foreground operations additionally require `--mode exclusive`. These switches express the workflow's execution policy, not new business authorization. Text goes through stdin, and every `desktop.ad*` JavaScript call must be awaited. The four original PowerShell helpers remain legacy APIs and do not inherit this policy.
 

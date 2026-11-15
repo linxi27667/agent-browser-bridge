@@ -35,7 +35,14 @@ node cli/agent.cjs doctor --expected-version 1.3.1
 node cli/agent.cjs route --url https://example.com
 node cli/agent.cjs route --app notepad.exe
 node cli/agent.cjs route --file .\export.csv
-node cli/agent.cjs desktop snapshot --app notepad.exe
+node cli/agent.cjs browser scenes
+node cli/agent.cjs --scene k3 browser tabs
+node cli/agent.cjs --scene k3 browser snap --url k3cloud
+node cli/agent.cjs --write --scene k3 browser hover-click ".todo-list li" "button.destroy"
+node cli/agent.cjs desktop capabilities --app notepad.exe
+node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app notepad.exe
+node cli/agent.cjs --write desktop deliver --stdin
+node cli/agent.cjs --write --mode exclusive desktop batch --stdin
 node cli/agent.cjs run --file .\reviewed-workflow.cjs
 ```
 
@@ -84,6 +91,13 @@ console.log(snapshot.ref_count);
 坐标输入的 JavaScript 形式是 `adMouseClick(x, y, {windowId})`；CLI 用任务选项 `--target-window w-...` 传递预检窗口，不把它作为原生 `mouse-click` 参数。两种形式都需要明确的可写 exclusive 任务。
 
 最小化窗口先用 `adRestoreWindow(undefined, {windowId})` 恢复，再通过 `adListWindows()` 确认 `minimized: false` 与实际焦点；不要把任务栏按钮成功返回当作恢复证明，也不要反复点击导致窗口再次最小化。`adOpenSystemSurface(surface)` 支持 `taskbar`、`system-tray`、`system-tray-overflow`、`start-menu`、`action-center`，同样需要可写 exclusive；读取这些区域可用 `adSnapshot(undefined, {surface})`。普通窗口快照仍须明确应用、窗口 ID 或根引用。
+
+### 4.1 能力快速识别、受约束批量与通用场景层
+
+- **能力快速识别（`adInspectCapabilities`）**：面对陌生桌面窗口时，先调 `await desktop.adInspectCapabilities('Weixin.exe', { preferFocused: true })`（或 `node cli/agent.cjs desktop capabilities --app Weixin.exe`）。返回 `minimized_unobservable`、`uia_semantic`（自动将只读/禁用文本框分离至 `readOnlyEditableRefs`，仅将真正可写输入框放入 `editableRefs`）或 `custom_ui_visual`（0 个可用客户区控件或仅剩标题栏最小化/最大化/关闭按钮）。一旦判定为 `custom_ui_visual`，立即切换受控视觉路线，不再反复轮询 `find`/`snapshot`。
+- **受约束原生批量（`adBatch`）**：`await desktop.adBatch(steps, { windowId })`（或 `node cli/agent.cjs --write --mode exclusive desktop batch --stdin`）逐项校验白名单、只读/独占策略与坐标窗口预检。当桌面运行时支持 `batch --stdin`（`1.3.2-dev` 及以上）时单次进程完成全部动作与回读；在 `1.3.1` 上自动降级为安全分段执行，确保任何输入文本绝不进入进程命令行参数，且返回结果自动脱敏写入字段。`adRaw(['batch', ...])` 保持拦截。
+- **通用窗口就绪与多消息核验投递（`scenes`）**：工作流上下文注入 `scenes.ensureWindowReady(desktop, target, options)`（自动恢复最小化、聚焦并校验窗口尺寸非折叠）与 `scenes.deliverMessagesVerified(desktop, spec, messages, options)`（支持 `uia_semantic` 单批 `set-value + get + click` 与 `custom_ui_visual` 单批 `screenshot + mouse-click + clipboard-set + ctrl+v + return + screenshot` 帧哈希变化核验；任何回读不符或提交异常立即停止并标记 `retry: 'unsafe'`，零自动重发）。
+- **单锁悬停点击（`page.hoverAndClick`）**：针对 CSS `:hover` 才显现的行内操作按钮（如 TodoMVC `.destroy`），使用 `await page.hoverAndClick(hoverSelector, clickSelector, guard)` 或 `abb hover-click`，在同一端口 UI 锁内完成悬停与点击。
 
 ## 5. 工作流与验收
 
@@ -134,7 +148,7 @@ const report = await runWorkflow(async function ({ desktop, step }) {
 
 本入口不自动重试动作。只在明确证明未投递且重试安全时考虑重试。恢复顺序是：停止进一步写入 → 只读观察 → 确认已完成步骤 → 修正条件 → 从明确边界接续。不能直接把包含提交或消息发送的整条工作流重跑。
 
-`invokeNamedButton`、`focusNamedWindow`、`sendKeysToNamedWindow`、`captureNamedWindow` 为兼容保留，没有接入新客户端策略。仅用于已审阅的旧集成或隔离测试，不能绕过新入口的拒绝。原 `cli/run.cjs` 也是可信代码入口，不是安全沙箱。
+`invokeNamedButton`、`focusNamedWindow`、`sendKeysToNamedWindow`、`captureNamedWindow` 默认在运行期抛出 `LEGACY_INTERFACE_DISABLED`，仅在 `BROWSER_BRIDGE_GUI_TESTS=1` 隔离测试或显式兼容开关下允许执行，防止 Agent 误调慢速 PowerShell 包装或绕过新客户端策略。旧 `cli/abb.cjs` 与 `cli/run.cjs` 仅保留共享仓兼容并在 `stderr` 提示改用 `node cli/agent.cjs`。
 
 ## 7. 验证与维护
 

@@ -1,0 +1,29 @@
+{
+  "site": "lceda",
+  "title": "嘉立创EDA专业版 (EasyEDA Pro Web V4)",
+  "summary": "嘉立创EDA专业版防后台休眠专用桥接、.eext 连接器静默导入、允许外部交互配置、Edge 本地网络权限放行与 daemon 断线一键自愈",
+  "domains": [
+    "pro.lceda.cn",
+    "*.lceda.cn",
+    "lceda.cn"
+  ],
+  "defaultGuard": "location.hostname.toLowerCase().includes('lceda.cn') || location.hostname.toLowerCase().includes('jlc.com')",
+  "notes": [
+    {
+      "path": "notes/workflow.md",
+      "description": "嘉立创EDA专业版后台休眠根因、防休眠启动参数、Edge 157 本地网络权限框处理、DOM.setFileInputFiles 静默导入 .eext 与一键自愈流程"
+    }
+  ],
+  "tools": [
+    {
+      "name": "status",
+      "description": "只读检查 easyeda daemon 健康状态、当前页面登录态与 IndexedDB 中连接器扩展启用/外部交互配置",
+      "entry": "tools/status.cjs"
+    },
+    {
+      "name": "ensure-ready",
+      "description": "一键幂等自愈：确保 daemon 存活、调试浏览器在线、连接器扩展已导入并开启允许外部交互、唤醒重连直至 connector: ok",
+      "entry": "tools/ensure-ready.cjs"
+    }
+  ]
+}

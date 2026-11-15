@@ -1,6 +1,6 @@
 # 金蝶云星空 (K3Cloud HTML5) 自动化经验笔记
 
-> 2026-11-09 在 `http://10.1.3.38/K3Cloud`（`101 广州高昌`）实机验证。可复用代码在 `tools/k3-actions.cjs`，CLI 入口 `tools/open-bill.cjs`。
+> 2026-11-09 在 `http://10.1.3.38/K3Cloud`（`101 广州高昌`）实机验证；2026-11-11 补充 `cli/abb.cjs` 状态化场景命令与 `notes/admin-console.md`（管理中心 `9232`）。可复用代码在 `tools/k3-actions.cjs`，CLI 入口 `cli/abb.cjs --scene k3` 与 `tools/open-bill.cjs`。
 
 ## 1. 上下文门禁与会话
 

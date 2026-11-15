@@ -183,6 +183,94 @@ async function openFixturePage() {
     assert.equal(await k3.closeActiveBillTab(page, opts), true);
     step('closeActiveBillTab');
 
+    // v0.7.2 管理中心四连击实机回归：0宽checkbox勾选 → 防秒关拆分菜单 → 确认弹窗 → 顶层模态框物理聚焦+blur二次认证 + typeKeysSafe防双倍输入
+    await page.evalChecked(`(() => {
+      const wrap = document.createElement('div');
+      wrap.id = 'adminFixture';
+      wrap.style.cssText = 'position:absolute;left:20px;top:100px;width:720px;height:440px;background:#fff;z-index:20';
+      wrap.innerHTML = \`
+        <ul style="list-style:none;margin:0;padding:4px">
+          <li class="kdmenuitem-splitbutton" style="display:inline-block;border:1px solid #999;padding:4px 8px">
+            <span class="kdmenuitem-content">密码策略</span>
+            <span class="k-i-arrow-s" id="splitArrow" style="display:inline-block;width:18px;height:18px;background:#ddd;margin-left:6px">▾</span>
+          </li>
+        </ul>
+        <div class="k-animation-container" id="splitPopup" style="display:none;position:absolute;left:24px;top:36px;width:120px;background:#fff;border:1px solid #666;z-index:40">
+          <ul class="k-popup" style="list-style:none;margin:0;padding:4px">
+            <li class="k-item" id="resetMenuItem" style="height:24px"><span class="kdmenuitem-content">重置密码</span></li>
+          </ul>
+        </div>
+        <div class="k-grid-content" style="margin-top:16px">
+          <table style="border-collapse:collapse;width:400px">
+            <tbody>
+              <tr data-uid="u1" style="height:28px"><td style="width:32px"><input type="checkbox" style="width:0;height:0;opacity:0"></td><td>张三</td><td>zs</td></tr>
+              <tr data-uid="u2" id="qxRow" style="height:28px"><td id="qxCell" style="width:32px;border:1px solid #ccc"><input type="checkbox" style="width:0;height:0;opacity:0"></td><td><a class="type-link">何齐新</a></td><td>qx.he</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="k-window" id="confirmDlg" style="display:none;position:absolute;left:180px;top:120px;width:280px;height:120px;background:#fff;border:1px solid #333;z-index:1004">
+          <div>密码即将修改，是否继续？</div>
+          <button id="confirmYes" style="width:64px;height:26px;margin-top:20px">是</button>
+        </div>
+        <div class="k-window" id="stale2fa" style="position:absolute;left:160px;top:100px;width:300px;height:140px;background:#eee;border:1px solid #999;z-index:1002">
+          <span class="k-window-title">旧残影二次认证</span>
+          <input type="password" id="stalePwd" placeholder="请输入密码" style="width:180px;height:24px">
+          <button style="width:64px;height:26px">确定</button>
+        </div>
+        <div class="k-window" id="top2fa" style="display:none;position:absolute;left:190px;top:110px;width:320px;height:160px;background:#fff;border:2px solid #06c;z-index:1005">
+          <span class="k-window-title">二次认证</span>
+          <input type="password" id="topPwd" placeholder="请输入管理员密码" style="display:block;width:200px;height:26px;margin:10px 0">
+          <input type="text" id="safeTypeInput" style="display:block;width:200px;height:24px;margin:6px 0">
+          <button id="top2faOk" style="width:64px;height:26px">确定</button>
+        </div>
+      \`;
+      document.body.appendChild(wrap);
+      window.__adminState = { rowChecked: false, linkOpened: false, resetClicked: false, confirmed: false, physicalFocused: false, blurred: false, authedValue: '' };
+      document.getElementById('qxCell').onclick = () => { window.__adminState.rowChecked = true; };
+      wrap.querySelector('a.type-link').onclick = () => { window.__adminState.linkOpened = true; };
+      const popup = document.getElementById('splitPopup');
+      document.getElementById('splitArrow').onclick = () => { popup.style.display = 'block'; };
+      // 模拟 Kendo Popup 一旦鼠标被 parkPointer 移去左上角 (2,2) 立即自毁收起！
+      document.addEventListener('mousemove', (ev) => {
+        if (popup.style.display === 'block' && ev.clientX <= 8 && ev.clientY <= 8) {
+          popup.style.display = 'none';
+        }
+      });
+      document.getElementById('resetMenuItem').onclick = () => {
+        window.__adminState.resetClicked = true;
+        popup.style.display = 'none';
+        document.getElementById('confirmDlg').style.display = 'block';
+      };
+      document.getElementById('confirmYes').onclick = () => {
+        window.__adminState.confirmed = true;
+        document.getElementById('confirmDlg').style.display = 'none';
+        document.getElementById('top2fa').style.display = 'block';
+      };
+      const topPwd = document.getElementById('topPwd');
+      topPwd.addEventListener('mousedown', () => { window.__adminState.physicalFocused = true; });
+      topPwd.addEventListener('blur', () => { window.__adminState.blurred = true; });
+      document.getElementById('top2faOk').onclick = () => {
+        if (window.__adminState.physicalFocused && window.__adminState.blurred) {
+          window.__adminState.authedValue = topPwd.value;
+        }
+      };
+      return true;
+    })()`);
+
+    await k3.selectGridRowByText(page, '何齐新', { alsoIncludes: 'qx.he', guard: GUARD });
+    assert.equal(await page.evalChecked('window.__adminState.rowChecked'), true, 'must click first non-link cell despite 0-width checkbox');
+    assert.equal(await page.evalChecked('window.__adminState.linkOpened'), false, 'must NOT click name hyperlink');
+    await k3.clickSplitMenuOption(page, '密码策略', '重置密码', { guard: GUARD });
+    assert.equal(await page.evalChecked('window.__adminState.resetClicked'), true, 'split-button dropdown must stay open without parkPointer closing it');
+    await k3.confirmK3Modal(page, '是', { guard: GUARD });
+    assert.equal(await page.evalChecked('window.__adminState.confirmed'), true);
+    await k3.submitK3Admin2FA(page, 'Dummy#88', { guard: GUARD });
+    assert.equal(await page.evalChecked('window.__adminState.authedValue'), 'Dummy#88', 'topmost 2FA modal must receive physical click + blur + exact password');
+    assert.equal(await page.evalChecked('document.getElementById("stalePwd").value'), '', 'stale lower-z-index .k-window must not be touched');
+    await cdp.typeKeysSafe(page, '#safeTypeInput', 'Abc12345', GUARD);
+    assert.equal(await page.evalChecked('document.getElementById("safeTypeInput").value'), 'Abc12345', 'typeKeysSafe must not double-insert chars');
+    step('v0.7.2 admin-console helpers (0-width row select, hover-safe split menu, topmost 2FA modal, typeKeysSafe)');
+
     await page.evalChecked(`(() => { const b = document.createElement('button'); b.id = 'btnLogin'; b.textContent = '登录'; b.style.cssText = 'position:absolute;left:10px;top:10px;width:60px;height:24px'; document.body.appendChild(b); return true; })()`);
     await assert.rejects(k3.openListBySearch(page, { query: '销售订单列表' }, opts), (e) => e.code === 'K3_SESSION_LOST');
     step('session loss is detected and stops the run');
