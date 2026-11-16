@@ -1871,3 +1871,168 @@ test('appRegistry strictExeMatch excludes WeChatAppEx/WXWorkWeb containers and c
   assert.equal(parsed.error.code, 'INVALID_ARGS');
   assert.match(parsed.error.message, /sessionName/i);
 });
+
+test('deliverChatSessionVerified auto-recovers WeChat chat tab from Moments/preview veil (outside click & modal-escape fallback)', async () => {
+  const { execFileSync } = require('node:child_process');
+  const { normalizeBatchSteps } = require('../lib/desktop/agentDesktopPolicy');
+  const origOcr = winHelper.ocrImage;
+  const origAssist = winHelper.assistForegroundWindow;
+  const origHash = winHelper.hashImageRegion;
+
+  const wechatSpec = appRegistry.resolveAppSpec('wechat');
+  assert.deepEqual(wechatSpec.chatTabRailOffset, { x: 35, y: 114 });
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-rail-recover-'));
+  const imgInitial = path.join(tmpDir, 'init.png');
+  const imgAfter = path.join(tmpDir, 'after.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-Command',
+      `Add-Type -AssemblyName System.Drawing; $b=New-Object System.Drawing.Bitmap 881,737; $g=[System.Drawing.Graphics]::FromImage($b); $g.Clear([System.Drawing.Color]::White); $g.Dispose(); $b.Save('${imgInitial.replace(/'/g, "''")}'); $b2=New-Object System.Drawing.Bitmap 881,737; $g2=[System.Drawing.Graphics]::FromImage($b2); $g2.Clear([System.Drawing.Color]::MintCream); $g2.Dispose(); $b2.Save('${imgAfter.replace(/'/g, "''")}'); $b.Dispose(); $b2.Dispose();`,
+    ], { windowsHide: true });
+
+    let mode = 'backdrop_dismiss'; // 'backdrop_dismiss' | 'modal_escape'
+    let state = 'moments_veiled'; // 'moments_veiled' | 'moments_open' | 'chats_tab' | 'filehelper_active'
+    let escapeBatches = 0;
+    const clicks = [];
+    const bounds = { x: 100, y: 50, width: 881, height: 737 };
+    const expectedRailPt = { x: 135, y: 164 };
+
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-wx-1',
+        window: { id: 'w-wx-1', pid: 40336, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds },
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds,
+      }),
+      adListWindows: async () => [{ id: 'w-wx-1', pid: 40336, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds }],
+      adClipboardClear: async () => ({ ok: true }),
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInitial, outPath);
+        return { path: outPath };
+      },
+      adMouseClick: async (x, y) => {
+        clicks.push({ x, y });
+        if (x === expectedRailPt.x && y === expectedRailPt.y) {
+          if (mode === 'backdrop_dismiss') {
+            if (state === 'moments_veiled') state = 'moments_open';
+            else if (state === 'moments_open') state = 'chats_tab';
+          } else if (state === 'moments_open') {
+            state = 'chats_tab';
+          }
+        }
+        return { ok: true };
+      },
+      adBatch: async (steps, call = {}) => {
+        normalizeBatchSteps(steps, { readOnly: false, mode: 'exclusive' }, call.windowId || 'w-wx-1');
+        if (steps.length === 2 && steps[0].command === 'press' && steps[0].combo === 'escape') {
+          escapeBatches += 1;
+          if (state === 'moments_veiled') state = 'moments_open';
+        }
+        if (steps.some(s => s.command === 'press' && s.combo === 'return') && state === 'chats_tab') {
+          state = 'filehelper_active';
+        }
+        const isDelivery = steps.some(s => s.command === 'clipboard-set') && !steps.some(s => s.combo === 'ctrl+f');
+        let shotSeq = 0;
+        const results = steps.map(s => {
+          if (s.command === 'screenshot' && s.outputPath) {
+            shotSeq += 1;
+            const useAfter = isDelivery && shotSeq === 2;
+            fs.copyFileSync(useAfter ? imgAfter : imgInitial, s.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 6, transport: 'native-batch-stdin' };
+      },
+    };
+
+    winHelper.assistForegroundWindow = async () => ({ ok: true, focused: true, isInteractiveDefaultDesktop: true });
+    winHelper.hashImageRegion = async (shotPath) => ({ ok: true, sha256: path.basename(shotPath).includes('after-delivery') ? 'msg-after' : 'msg-before' });
+    winHelper.ocrImage = async (shotPath, opts = {}) => {
+      const base = path.basename(shotPath);
+      const reg = String(opts.region || '');
+      if (reg.includes('messages')) {
+        return { imageWidth: 881, imageHeight: 737, text: '你好', lines: [{ text: '你好', rawText: '你好', x: 380, y: 120, width: 60, height: 20, words: [] }] };
+      }
+      if (state === 'moments_veiled') {
+        if (reg === 'full') {
+          return { imageWidth: 881, imageHeight: 737, text: '你好\n可以投稿吗', lines: [{ text: '你好', rawText: '你好', x: 300, y: 180, width: 80, height: 24, words: [] }] };
+        }
+        return { imageWidth: 881, imageHeight: 737, text: '', lines: [], matches: [] };
+      }
+      if (reg === 'header') {
+        if (state === 'filehelper_active') {
+          return {
+            imageWidth: 881,
+            imageHeight: 737,
+            text: '文件传输助手',
+            lines: [{ text: '文件传输助手', rawText: '文件传输助手', x: 360, y: 16, width: 120, height: 20, words: [] }],
+            matches: opts.find === '文件传输助手'
+              ? [{ lineText: '文件传输助手', matchedText: '文件传输助手', confidence: 'exact', imageRect: { x: 360, y: 16, width: 120, height: 20 }, screen: { center: { x: 520, y: 76 } } }]
+              : [],
+          };
+        }
+        if (state === 'chats_tab') {
+          return { imageWidth: 881, imageHeight: 737, text: '工作群', lines: [{ text: '工作群', rawText: '工作群', x: 360, y: 16, width: 80, height: 20, words: [] }], matches: [] };
+        }
+        return { imageWidth: 881, imageHeight: 737, text: '', lines: [], matches: [] };
+      }
+      if (reg === 'sidebar') {
+        if (base.includes('search-results') && state === 'chats_tab') {
+          return {
+            imageWidth: 881,
+            imageHeight: 737,
+            text: '文件传输助手',
+            lines: [{ text: '文件传输助手', rawText: '文件传输助手', x: 90, y: 140, width: 110, height: 20, words: [] }],
+            matches: [],
+          };
+        }
+        if (state === 'chats_tab') {
+          return { imageWidth: 881, imageHeight: 737, text: '工作群', lines: [{ text: '工作群', rawText: '工作群', x: 90, y: 120, width: 80, height: 20, words: [] }], matches: [] };
+        }
+        return { imageWidth: 881, imageHeight: 737, text: '', lines: [], matches: [] };
+      }
+      return { imageWidth: 881, imageHeight: 737, text: '', lines: [], matches: [] };
+    };
+
+    try {
+      // Case A: Outside left-rail click dismisses preview veil + switches to Chats tab without any Escape
+      const resA = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        sessionName: '文件传输助手',
+        autoDetectLayout: false,
+        items: ['测试A'],
+      });
+      assert.equal(resA.ok, true);
+      assert.equal(resA.verified, true);
+      assert.equal(resA.navigationMethod, 'search_enter');
+      assert.equal(escapeBatches, 0, 'Backdrop-dismissible veil must recover cleanly with ZERO Escape keys');
+      assert.ok(clicks.filter(c => c.x === expectedRailPt.x && c.y === expectedRailPt.y).length >= 2);
+
+      // Case B: Centered modal ignores outside clicks -> full OCR confirms modal -> pure Escape batch closes veil -> rail click restores Chats tab
+      mode = 'modal_escape';
+      state = 'moments_veiled';
+      clicks.length = 0;
+      const resB = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        sessionName: '文件传输助手',
+        autoDetectLayout: false,
+        items: ['测试B'],
+      });
+      assert.equal(resB.ok, true);
+      assert.equal(resB.verified, true);
+      assert.equal(resB.navigationMethod, 'search_enter');
+      assert.equal(escapeBatches, 1, 'Modal eating outside clicks must trigger exactly 1 pure-keyboard Escape recovery batch');
+      assert.ok(clicks.filter(c => c.x === expectedRailPt.x && c.y === expectedRailPt.y).length >= 3);
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+      winHelper.hashImageRegion = origHash;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

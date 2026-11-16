@@ -13,7 +13,7 @@ Follow these rules strictly before running any command:
 3. For screenshots, **ALWAYS** pass `--app <name>` (or `--window-id w-<hwnd>`, `--title-includes <text>`, or `--screen 0`). Omitting a target fails immediately with `INVALID_ARGS`.
 
 ### Recipe A: Send Text / Image / GIF Sticker / File to WeChat or WeCom (Auto-Wakes System Tray)
-`desktop chat-send --stdin` automatically resolves the live running process (`C:\Weixin\Weixin.exe` etc.) or registry `InstallPath`, wakes background tray-hidden windows from Windows 11/10 hidden icons overflow, auto-enters WeChat 4.x `"进入微信"` popups (or fast-fails in `<0.6s` with `WECHAT_LOGIN_REQUIRED` on QR screens), verifies the chat header before sending, and restores the user's cursor in ~`14ms` (mouse-click runs **outside** the multi-step paste batch).
+`desktop chat-send --stdin` automatically resolves the live running process (`C:\Weixin\Weixin.exe` etc.) or registry `InstallPath` (with strict `WeChatAppEx.exe` / `WXWorkWeb.exe` mini-program isolation, plus optional `--window-id w-<hwnd>` pinning), wakes background tray-hidden windows from Windows 11/10 hidden icons overflow, auto-enters WeChat 4.x `"进入微信"` popups (or fast-fails in `<0.6s` with `WECHAT_LOGIN_REQUIRED` on QR screens), automatically recovers to the left-rail `"聊天"` tab if the window was parked on `发现/朋友圈/通讯录/收藏` or behind an in-window preview veil, verifies the chat header before sending, and restores the user's cursor in ~`14ms` (mouse-click runs **outside** the multi-step paste batch).
 
 **Git Bash:**
 ```bash
@@ -114,7 +114,7 @@ node cli/agent.cjs desktop shot --help
 | --- | --- | --- |
 | `WECHAT_LOGIN_REQUIRED` / `WECHAT_LOGIN_TIMEOUT` | WeChat requires QR scan or phone confirmation, or stayed on the login prompt after pressing `"进入微信"`. | **STOP immediately.** Report to the user to scan QR / confirm on their phone. Do **NOT** loop `open-app` or launch extra `.exe` copies. |
 | `DESKTOP_SANDBOX_ISOLATED` | Current shell runs inside an isolated Win32 desktop (`exebox-*`) that cannot send foreground input to `WinSta0\Default`. | Switch to the `windows-desktop` MCP tools (`desktop_chat_send`, etc.) or an interactive `WinSta0\Default` terminal. Do **NOT** attempt sandbox bypasses. |
-| `CHAT_TARGET_UNVERIFIED` | Header OCR after search/click did not match `sessionName`; **0 items were sent**. | **STOP.** Inspect sidebar/header with `desktop ocr --app <app> --region full` and verify exact `sessionName`. |
+| `CHAT_TARGET_UNVERIFIED` | Header OCR after tab-recovery/search/click did not match `sessionName`; **0 items were sent**. | **STOP.** Run read-only `desktop windows --app <app>`, `desktop ocr --app <app> --region full`, and `desktop shot --app <app>` (or pin `--window-id w-<hwnd>`), and verify exact `sessionName`. |
 | `DELIVERY_UNVERIFIED` or `disposition: "delivered_unverified"` / `retry: "unsafe"` | Input/paste steps were dispatched, so the message may already have been sent. | **NEVER auto-retry.** Inspect `desktop ocr --app <app> --region messages` or `desktop shot --app <app>` first. |
 | `WINDOW_NOT_FOUND` | App process may only exist in background system tray, or no window matches filters. | Run `node cli/agent.cjs --write --mode exclusive desktop open-app --app <app>` (or `desktop windows`). |
 | `INVALID_ARGS` | Missing `--app`/`--window-id` (e.g. on `desktop shot`), missing `--stdin`, or unsupported flag like `--headed`. | Run `node cli/agent.cjs desktop <sub> --help` and copy the exact template above. |
