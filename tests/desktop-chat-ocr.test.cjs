@@ -1684,3 +1684,160 @@ test('cli/agent.cjs supports subcommand --help, enforces explicit desktop shot t
   assert.equal(nlParsed.data.app, 'wechat');
   assert.match(nlParsed.data.recommendedCommand, /chat-send|shot/);
 });
+
+test('deliverChatSessionVerified never sends Escape on WeChat search, passes real normalizeBatchSteps into sidebarScroll, and falls back from dropdown click to Enter', async () => {
+  const { execFileSync } = require('node:child_process');
+  const winHelper = require('../lib/desktop/winHelper');
+  const { normalizeBatchSteps } = require('../lib/desktop/agentDesktopPolicy');
+  const { deliverChatSessionVerified } = require('../lib/automation/scenes/desktopChat');
+  const origOcr = winHelper.ocrImage;
+  const origAssist = winHelper.assistForegroundWindow;
+  const origHash = winHelper.hashImageRegion;
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-no-esc-policy-'));
+  const imgInitial = path.join(tmpDir, 'init.png');
+  const imgAfter = path.join(tmpDir, 'after.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-Command',
+      `Add-Type -AssemblyName System.Drawing; $b=New-Object System.Drawing.Bitmap 480,360; $g=[System.Drawing.Graphics]::FromImage($b); $g.Clear([System.Drawing.Color]::White); $g.Dispose(); $b.Save('${imgInitial.replace(/'/g, "''")}'); $b2=New-Object System.Drawing.Bitmap 480,360; $g2=[System.Drawing.Graphics]::FromImage($b2); $g2.Clear([System.Drawing.Color]::AliceBlue); $g2.Dispose(); $b2.Save('${imgAfter.replace(/'/g, "''")}'); $b.Dispose(); $b2.Dispose();`,
+    ], { windowsHide: true });
+
+    const observedBatches = [];
+    let navigated = false;
+    let scrolled = false;
+    const makeMockDesktop = ({ allowScrollHit, allowReturnAfterMissedClick }) => ({
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-chat1',
+        window: { id: 'w-chat1', pid: 4444, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } },
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds: { x: 0, y: 0, width: 480, height: 360 },
+      }),
+      adListWindows: async () => [{ id: 'w-chat1', app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } }],
+      adClipboardClear: async () => ({ ok: true }),
+      adMouseClick: async (x, y) => {
+        if (allowScrollHit && scrolled && x === 90 && y === 220) navigated = true;
+        return { ok: true };
+      },
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInitial, outPath);
+        return { path: outPath };
+      },
+      adBatch: async (steps, call = {}) => {
+        // Run the real policy validator on every batch to guarantee no press+coordinate mixing triggers DESKTOP_TARGET_UNVERIFIED
+        normalizeBatchSteps(steps, { readOnly: false, mode: 'exclusive' }, call.windowId || 'w-chat1');
+        observedBatches.push(steps.map(s => ({ command: s.command, combo: s.combo || null })));
+        assert.equal(
+          steps.some(s => s.command === 'press' && String(s.combo || '').toLowerCase() === 'escape'),
+          false,
+          'WeChat navigation batches must never emit Escape (which hides WeChat to system tray)',
+        );
+        if (steps.some(s => s.command === 'mouse-wheel')) scrolled = true;
+        if (allowReturnAfterMissedClick && steps.some(s => s.command === 'press' && s.combo === 'return') && !steps.some(s => s.command === 'clipboard-set')) {
+          navigated = true;
+        }
+        const isDelivery = steps.some(s => s.command === 'clipboard-set') && !steps.some(s => s.combo === 'ctrl+f');
+        let shotSeq = 0;
+        const results = steps.map(s => {
+          if (s.command === 'screenshot' && s.outputPath) {
+            shotSeq += 1;
+            const useAfter = isDelivery && shotSeq === 2;
+            fs.copyFileSync(useAfter ? imgAfter : imgInitial, s.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 8, transport: 'native-batch-stdin' };
+      },
+    });
+
+    winHelper.assistForegroundWindow = async () => ({ ok: true, focused: true, isInteractiveDefaultDesktop: true });
+    winHelper.hashImageRegion = async (shotPath) => ({ ok: true, sha256: path.basename(shotPath).includes('after-delivery') ? 'msg-after' : 'msg-before' });
+
+    // Case 1: search misses -> falls back cleanly into trySidebarScroll -> mouse-wheel -> click -> delivery
+    let phase = 'case1';
+    winHelper.ocrImage = async (shotPath, opts = {}) => {
+      const base = path.basename(shotPath);
+      if (String(opts.region || '').includes('messages')) {
+        return { imageWidth: 480, imageHeight: 360, text: '你好', lines: [{ text: '你好', rawText: '你好', x: 180, y: 120, width: 60, height: 20, words: [] }] };
+      }
+      if (String(opts.region || '') === 'header' || opts.region === 'header') {
+        return {
+          imageWidth: 480,
+          imageHeight: 360,
+          text: navigated ? '文件传输助手' : '工作群',
+          lines: [{ text: navigated ? '文件传输助手' : '工作群', rawText: navigated ? '文件传输助手' : '工作群', x: 180, y: 12, width: 100, height: 18, words: [] }],
+          matches: navigated && opts.find === '文件传输助手'
+            ? [{ lineText: '文件传输助手', matchedText: '文件传输助手', confidence: 'exact', imageRect: { x: 180, y: 12, width: 100, height: 18 }, screen: { center: { x: 230, y: 21 } } }]
+            : [],
+        };
+      }
+      if (phase === 'case1' && base.includes('scroll-1') && scrolled) {
+        return {
+          imageWidth: 480,
+          imageHeight: 360,
+          text: '文件传输助手',
+          lines: [{ text: '文件传输助手', rawText: '文件传输助手', x: 40, y: 210, width: 100, height: 20, words: [] }],
+          matches: opts.find === '文件传输助手'
+            ? [{ lineText: '文件传输助手', matchedText: '文件传输助手', confidence: 'exact', imageRect: { x: 40, y: 210, width: 100, height: 20 }, screen: { center: { x: 90, y: 220 } } }]
+            : [],
+        };
+      }
+      if (phase === 'case2' && base.includes('search-results')) {
+        return {
+          imageWidth: 480,
+          imageHeight: 360,
+          text: '文件传输助手',
+          lines: [{ text: '文件传输助手', rawText: '文件传输助手', x: 40, y: 140, width: 100, height: 20, words: [] }],
+          matches: opts.find === '文件传输助手'
+            ? [{ lineText: '文件传输助手', matchedText: '文件传输助手', confidence: 'exact', imageRect: { x: 40, y: 140, width: 100, height: 20 }, screen: { center: { x: 90, y: 150 } } }]
+            : [],
+        };
+      }
+      return { imageWidth: 480, imageHeight: 360, text: '', lines: [], matches: [] };
+    };
+
+    try {
+      const res1 = await deliverChatSessionVerified(
+        makeMockDesktop({ allowScrollHit: true, allowReturnAfterMissedClick: false }),
+        {
+          app: 'wechat',
+          sessionName: '文件传输助手',
+          navigationMode: 'auto',
+          sidebarScrollPages: 1,
+          autoDetectLayout: false,
+          items: ['你好'],
+        },
+      );
+      assert.equal(res1.ok, true);
+      assert.equal(res1.navigationMethod, 'sidebar_scroll_click');
+      assert.ok(observedBatches.some(b => b.some(s => s.command === 'mouse-wheel')));
+
+      // Case 2: search dropdown click does not change header, auto mode falls back cleanly to search Return
+      phase = 'case2';
+      navigated = false;
+      scrolled = false;
+      const res2 = await deliverChatSessionVerified(
+        makeMockDesktop({ allowScrollHit: false, allowReturnAfterMissedClick: true }),
+        {
+          app: 'wechat',
+          sessionName: '文件传输助手',
+          navigationMode: 'auto',
+          sidebarScrollPages: 1,
+          autoDetectLayout: false,
+          items: ['你好'],
+        },
+      );
+      assert.equal(res2.ok, true);
+      assert.equal(res2.navigationMethod, 'search_enter');
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+      winHelper.hashImageRegion = origHash;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
