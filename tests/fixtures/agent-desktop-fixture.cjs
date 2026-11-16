@@ -206,6 +206,13 @@ process.stdin.on('end', () => {
           bounds: { x: 100, y: 80, width: 986, height: 736 },
         },
         {
+          id: 'w-wechatappex',
+          app_name: 'WeChatAppEx.exe',
+          title: '微信',
+          is_focused: true,
+          bounds: { x: 120, y: 90, width: 920, height: 890 },
+        },
+        {
           id: 'w-396324',
           app_name: 'Weixin.exe',
           title: '微信',
@@ -213,8 +220,9 @@ process.stdin.on('end', () => {
           bounds: { x: 200, y: 120, width: 895, height: 744 },
         },
       ];
+      // Simulate real Rust agent-desktop substring matching so `--app=wechat` hits WeChatAppEx.exe when unguarded.
       const filtered = appFilter
-        ? all.filter(w => w.app_name.toLowerCase() === appFilter)
+        ? all.filter(w => w.app_name.toLowerCase().includes(appFilter))
         : all;
       console.log(JSON.stringify({ version: '2.6', ok: true, data: filtered }));
       return;

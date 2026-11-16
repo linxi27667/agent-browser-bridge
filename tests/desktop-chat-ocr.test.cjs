@@ -1841,3 +1841,33 @@ test('deliverChatSessionVerified never sends Escape on WeChat search, passes rea
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('appRegistry strictExeMatch excludes WeChatAppEx/WXWorkWeb containers and chat-send CLI accepts --window-id with --stdin', () => {
+  const { spawnSync } = require('node:child_process');
+  const wechat = appRegistry.resolveAppSpec('wechat');
+  const wecom = appRegistry.resolveAppSpec('wecom');
+  assert.equal(wechat.strictExeMatch, true);
+  assert.ok(wechat.excludeExeNames.includes('wechatappex.exe'));
+
+  const windows = [
+    { id: 'w-appex', app_name: 'WeChatAppEx.exe', title: '微信', is_focused: true, minimized: false, bounds: { x: 100, y: 100, width: 920, height: 890 } },
+    { id: 'w-weixin', app_name: 'Weixin.exe', title: '微信', is_focused: false, minimized: false, bounds: { x: 200, y: 120, width: 895, height: 744 } },
+    { id: 'w-wxweb', app_name: 'WXWorkWeb.exe', title: '企业微信', is_focused: true, minimized: false, bounds: { x: 80, y: 80, width: 1000, height: 800 } },
+    { id: 'w-wxmain', app_name: 'WXWork.exe', title: '企业微信', is_focused: false, minimized: false, bounds: { x: 80, y: 80, width: 960, height: 680 } },
+  ];
+  const wechatMatches = appRegistry.matchWindowsList(windows, wechat, { preferMainWindow: true });
+  assert.deepEqual(wechatMatches.map(w => w.id), ['w-weixin']);
+  const wecomMatches = appRegistry.matchWindowsList(windows, wecom, { preferMainWindow: true });
+  assert.deepEqual(wecomMatches.map(w => w.id), ['w-wxmain']);
+
+  const agentCli = path.resolve(__dirname, '..', 'cli', 'agent.cjs');
+  const res = spawnSync(
+    process.execPath,
+    [agentCli, '--write', '--mode', 'exclusive', 'desktop', 'chat-send', '--window-id', 'w-11800172', '--stdin'],
+    { input: '{"items":["hi"]}', encoding: 'utf8', windowsHide: true },
+  );
+  assert.equal(res.status, 1);
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.error.code, 'INVALID_ARGS');
+  assert.match(parsed.error.message, /sessionName/i);
+});

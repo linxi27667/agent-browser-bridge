@@ -24,7 +24,7 @@ const SUBCOMMAND_HELP = {
   batch       Raw UIA/input step array via --stdin JSON (--write [--mode exclusive])
 
 Run "node cli/agent.cjs desktop <subcommand> --help" for copy-paste examples.`,
-  'desktop:chat-send': `desktop chat-send --stdin (requires --write --mode exclusive)
+  'desktop:chat-send': `desktop chat-send --stdin [--app ALIAS] [--window-id w-...] (requires --write --mode exclusive)
 
 PowerShell example (recommended — auto-wakes tray, verifies chat header OCR, optional saveAfterShot):
   @'
@@ -649,6 +649,7 @@ async function executeDesktopCommand(options, args) {
       const found = await appRegistry.findMatchingWindows(desktop, kv['--app'], {
         windowId: targetWindowId,
         titleIncludes: kv['--title-includes'],
+        preferMainWindow: !targetWindowId && !kv['--title-includes'],
         signal: leaseSignal,
         timeoutMs: options.timeoutMs,
       });
@@ -742,9 +743,11 @@ async function executeDesktopCommand(options, args) {
   }
 
   if (sub === 'chat-send') {
-    if (args.length !== 2 || args[1] !== '--stdin') {
+    const rest = args.slice(1);
+    if (!rest.includes('--stdin')) {
       throw fail('INVALID_ARGS', 'desktop chat-send requires --stdin with JSON payload on standard input');
     }
+    const kv = pairs(rest.filter(a => a !== '--stdin'), ['--app', '--window-id', '--window']);
     if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop chat-send requires --write');
     if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop chat-send requires --mode exclusive');
     const raw = await stdinText();
@@ -758,11 +761,13 @@ async function executeDesktopCommand(options, args) {
       throw fail('INVALID_ARGS', 'desktop chat-send --stdin requires a JSON object');
     }
     const baseSpec = payload.spec && typeof payload.spec === 'object' ? payload.spec : payload;
+    const cliWindowId = kv['--window-id'] || kv['--window'] || options.windowId;
     const spec = {
       ...baseSpec,
       ...(payload.items && !baseSpec.items ? { items: payload.items } : {}),
       ...(payload.messages && !baseSpec.messages && !baseSpec.items ? { messages: payload.messages } : {}),
-      ...(options.windowId && !baseSpec.windowId ? { windowId: options.windowId } : {}),
+      ...(kv['--app'] && !baseSpec.app ? { app: kv['--app'] } : {}),
+      ...(cliWindowId && !baseSpec.windowId ? { windowId: cliWindowId } : {}),
     };
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });

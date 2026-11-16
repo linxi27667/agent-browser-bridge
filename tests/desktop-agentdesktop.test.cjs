@@ -319,11 +319,19 @@ test('exclusive mouse, hover, wheel, and window geometry commands enforce foregr
 
 test('adInspectCapabilities enforces app isolation when app and windowId are combined', async () => {
   const desktop = client({}, 'wechat-coexist');
+  const preferred = await desktop.adInspectCapabilities('wechat', { preferFocused: true });
+  assert.equal(preferred.windowId, 'w-396324');
+  assert.equal(preferred.window.app_name, 'Weixin.exe');
+
   const cap = await desktop.adInspectCapabilities('wechat', { windowId: 'w-396324' });
   assert.equal(cap.windowId, 'w-396324');
   assert.equal(cap.window.app_name, 'Weixin.exe');
   assert.equal(cap.mode, 'custom_ui_visual');
 
+  await assert.rejects(
+    desktop.adInspectCapabilities('wechat', { windowId: 'w-wechatappex' }),
+    isCode('WINDOW_NOT_FOUND'),
+  );
   await assert.rejects(
     desktop.adInspectCapabilities('wechat', { windowId: 'w-wxwork' }),
     isCode('WINDOW_NOT_FOUND'),
