@@ -528,9 +528,9 @@ async function executeDesktopCommand(options, args) {
     if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop click-text requires --write');
     if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop click-text requires --mode exclusive');
     const rest = args.slice(1);
-    const boolFlags = new Set(['--double', '--launch', '--no-restore']);
+    const boolFlags = new Set(['--double', '--launch', '--no-restore', '--no-restore-cursor', '--no-ripple']);
     const kv = pairs(rest.filter(a => !boolFlags.has(a)), [
-      '--app', '--exe', '--window-id', '--title-includes', '--text', '--region', '--index', '--button', '--scale', '--scroll-retries', '--scroll-dy',
+      '--app', '--exe', '--window-id', '--title-includes', '--text', '--region', '--index', '--button', '--scale', '--scroll-retries', '--scroll-dy', '--click-mode',
     ]);
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });
@@ -551,6 +551,9 @@ async function executeDesktopCommand(options, args) {
           doubleClick: rest.includes('--double'),
           launchIfMissing: rest.includes('--launch'),
           restoreIfMinimized: !rest.includes('--no-restore'),
+          restoreCursor: !rest.includes('--no-restore-cursor'),
+          ripple: !rest.includes('--no-ripple'),
+          ...(kv['--click-mode'] ? { clickMode: kv['--click-mode'] } : {}),
         },
         { signal: leaseSignal, timeoutMs: options.timeoutMs },
       );

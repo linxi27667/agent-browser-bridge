@@ -316,3 +316,38 @@ test('exclusive mouse, hover, wheel, and window geometry commands enforce foregr
     await assert.rejects(exclusive.adPress(badCombo, { windowId: 'w-123' }), isCode('INVALID_ARGS'));
   }
 });
+
+test('adInspectCapabilities enforces app isolation when app and windowId are combined', async () => {
+  const desktop = client({}, 'wechat-coexist');
+  const cap = await desktop.adInspectCapabilities('wechat', { windowId: 'w-396324' });
+  assert.equal(cap.windowId, 'w-396324');
+  assert.equal(cap.window.app_name, 'Weixin.exe');
+  assert.equal(cap.mode, 'custom_ui_visual');
+
+  await assert.rejects(
+    desktop.adInspectCapabilities('wechat', { windowId: 'w-wxwork' }),
+    isCode('WINDOW_NOT_FOUND'),
+  );
+  await assert.rejects(
+    desktop.adInspectCapabilities('custom.exe', { windowId: 'w-wxwork' }),
+    isCode('WINDOW_NOT_FOUND'),
+  );
+});
+
+test('cursor-overlay policy validates args and allows cooperative enable/disable while rejecting session', async () => {
+  const reader = client({ readOnly: true });
+  await assert.rejects(reader.adCursorOverlay('enable', { label: 'AI' }), isCode('READ_ONLY_BLOCKED'));
+
+  const coop = client({ readOnly: false, mode: 'cooperative' });
+  await assert.rejects(coop.adCursorOverlay('status'), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adCursorOverlay('   '), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adCursorOverlay('enable', { image: 'relative-cursor.png' }), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adCursorOverlay('enable', { maxWords: 99 }), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adCursorOverlay('enable', { size: 99 }), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adCursorOverlay('enable', { accent: 'not-a-color' }), isCode('INVALID_ARGS'));
+  await assert.rejects(coop.adRaw(['session', 'start']), isCode('DESKTOP_COMMAND_BLOCKED'));
+
+  const enabled = await coop.adCursorOverlay('enable', { label: 'Testing', accent: '#0EA5E9' });
+  assert.equal(enabled.command, 'cursor-overlay');
+  assert.deepEqual(enabled.args, ['cursor-overlay', 'enable', '--label=Testing', '--accent=#0EA5E9']);
+});

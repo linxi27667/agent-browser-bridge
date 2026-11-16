@@ -194,6 +194,40 @@ process.stdin.on('end', () => {
       return;
     }
 
+    if (scenario === 'wechat-coexist' && command === 'list-windows') {
+      const appFlag = args.find(a => a.startsWith('--app='));
+      const appFilter = appFlag ? appFlag.slice('--app='.length).toLowerCase() : '';
+      const all = [
+        {
+          id: 'w-wxwork',
+          app_name: 'WXWork.exe',
+          title: '企业微信',
+          is_focused: true,
+          bounds: { x: 100, y: 80, width: 986, height: 736 },
+        },
+        {
+          id: 'w-396324',
+          app_name: 'Weixin.exe',
+          title: '微信',
+          is_focused: false,
+          bounds: { x: 200, y: 120, width: 895, height: 744 },
+        },
+      ];
+      const filtered = appFilter
+        ? all.filter(w => w.app_name.toLowerCase() === appFilter)
+        : all;
+      console.log(JSON.stringify({ version: '2.6', ok: true, data: filtered }));
+      return;
+    }
+    if (scenario === 'wechat-coexist' && command === 'snapshot') {
+      console.log(JSON.stringify({
+        version: '2.6',
+        ok: true,
+        data: { snapshot_id: 'swx1', ref_count: 1, tree: { role: 'window', name: '微信', children: [] } },
+      }));
+      return;
+    }
+
     if (scenario === 'select-unsupported' && command === 'select') {
       console.log(JSON.stringify({
         version: '2.6',

@@ -1105,3 +1105,332 @@ test('deliverChatSessionVerified supports sidebar wheel-scroll fallback, clickTe
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('wechat preset strictly isolates WXWork.exe and folds WinRT CJK radical splits', () => {
+  const wechatSpec = appRegistry.resolveAppSpec('wechat');
+  const weixinExeSpec = appRegistry.resolveAppSpec('Weixin.exe');
+  const wxPathSpec = appRegistry.resolveAppSpec('C:\\Program Files\\Tencent\\Weixin\\Weixin.exe');
+  const wecomSpec = appRegistry.resolveAppSpec('wecom');
+
+  const mixedWindows = [
+    { id: 'w-wxwork', app_name: 'WXWork.exe', title: '企业微信', is_focused: true, minimized: false, bounds: { x: 100, y: 80, width: 986, height: 736 } },
+    { id: 'w-preview', app_name: 'WXWork.exe', title: '预览', is_focused: false, minimized: false, bounds: { x: 120, y: 90, width: 960, height: 640 } },
+    { id: 'w-login', app_name: 'Weixin.exe', title: '微信', is_focused: false, minimized: false, bounds: { x: 812, y: 390, width: 296, height: 388 } },
+  ];
+
+  for (const spec of [wechatSpec, weixinExeSpec, wxPathSpec]) {
+    const matched = appRegistry.matchWindowsList(mixedWindows, spec, {});
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].id, 'w-login');
+  }
+
+  const onlyWxwork = [mixedWindows[0], mixedWindows[1]];
+  assert.equal(appRegistry.matchWindowsList(onlyWxwork, wechatSpec, {}).length, 0);
+  assert.equal(
+    appRegistry.matchWindowsList([{ id: 'w-chrome', app_name: 'chrome.exe', title: '微信', bounds: { x: 0, y: 0, width: 900, height: 700 } }], wechatSpec, {}).length,
+    0,
+  );
+  assert.equal(
+    appRegistry.matchWindowsList(mixedWindows, wechatSpec, { windowId: 'w-wxwork' }).length,
+    0,
+  );
+
+  const wecomMatched = appRegistry.matchWindowsList(mixedWindows, wecomSpec, {});
+  assert.equal(wecomMatched.length, 2);
+  assert.ok(wecomMatched.every(w => w.app_name === 'WXWork.exe'));
+
+  assert.equal(winHelper.canonicalOcrKey('文亻牛传输助手'), '文件传输助手');
+  assert.equal(winHelper.canonicalOcrKey('文亻制专输助手'), '文件传输助手');
+  assert.equal(isStrictHeaderLineMatch('文亻牛传输助手', '文件传输助手'), true);
+  assert.equal(isStrictHeaderLineMatch('文亻制专输助手\n佣： 48', '文件传输助手'), true);
+  assert.equal(isStrictHeaderLineMatch('文 且力 传 输', '文助传输'), true);
+  assert.equal(isStrictHeaderLineMatch('文件传输且力手', '文件传输助手'), true);
+  assert.equal(winHelper.canonicalOcrKey('文件传且力手'), '文件传助手');
+  assert.equal(isStrictHeaderLineMatch('外部文件传输助手', '文件传输助手'), false);
+  assert.equal(isStrictHeaderLineMatch('新研发讨论', '研发讨论'), false);
+  assert.equal(isStrictHeaderLineMatch('文件传输群', '文件传输'), false);
+  assert.equal(isStrictHeaderLineMatch('陈大亮工作群', '陈小明工作群'), false);
+  assert.equal(isStrictHeaderLineMatch('文件传输群', '文件传输助手'), false);
+  assert.equal(isStrictHeaderLineMatch('外部研发群', '研发群'), false);
+
+  const splitOcr = {
+    imageWidth: 960,
+    imageHeight: 680,
+    lines: [
+      {
+        text: '文亻牛传输助手',
+        rawText: '文 亻 牛 传 输 助 手',
+        x: 70,
+        y: 94,
+        width: 110,
+        height: 16,
+        words: [
+          { text: '文', x: 70, y: 94, width: 15, height: 16 },
+          { text: '亻', x: 85, y: 94, width: 10, height: 16 },
+          { text: '牛', x: 95, y: 94, width: 15, height: 16 },
+          { text: '传', x: 110, y: 94, width: 17, height: 16 },
+          { text: '输', x: 127, y: 94, width: 17, height: 16 },
+          { text: '助', x: 144, y: 94, width: 18, height: 16 },
+          { text: '手', x: 162, y: 94, width: 18, height: 16 },
+        ],
+      },
+    ],
+  };
+  const hits = winHelper.findOcrMatches(splitOcr, '文件传输助手', { x: 0, y: 0, width: 960, height: 680 });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].distance, 0);
+  assert.equal(hits[0].confidence, 'ocr_radical_folded');
+});
+
+test('ensureWindowReady auto-enters WeChat 4.x login popup and guards QR-required or readOnly', async () => {
+  const loginBounds = { x: 812, y: 390, width: 296, height: 388 };
+  const mainBounds = { x: 562, y: 280, width: 796, height: 648 };
+
+  const roDesktop = {
+    adPolicy: () => ({ readOnly: true, mode: 'exclusive' }),
+    adInspectCapabilities: async () => ({
+      windowId: 'w-login',
+      minimized: false,
+      isFocused: true,
+      bounds: loginBounds,
+      mode: 'uia_semantic',
+      buttonRefs: [{ ref: '@s1:e1', role: 'button', name: '进入微信' }],
+    }),
+  };
+  await assert.rejects(
+    ensureWindowReady(roDesktop, { app: 'wechat' }, { focus: true }),
+    err => err?.code === 'READ_ONLY_BLOCKED' || err?.code === 'DESKTOP_WINDOW_BOUNDS_INVALID',
+  );
+
+  const qrDesktop = {
+    adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+    adInspectCapabilities: async () => ({
+      windowId: 'w-login',
+      minimized: false,
+      isFocused: true,
+      bounds: loginBounds,
+      mode: 'uia_semantic',
+      buttonRefs: [{ ref: '@s1:e2', role: 'button', name: '仅传输文件' }],
+    }),
+    adFind: async () => ({ match: null }),
+  };
+  await assert.rejects(
+    ensureWindowReady(qrDesktop, { app: 'wechat' }, { focus: true }),
+    { code: 'WECHAT_LOGIN_REQUIRED' },
+  );
+
+  let entered = false;
+  let mainFocused = false;
+  const okDesktop = {
+    adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+    adInspectCapabilities: async (_app, call = {}) => {
+      if (call.windowId === 'w-main') {
+        return {
+          windowId: 'w-main',
+          window: { id: 'w-main', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: mainFocused, bounds: mainBounds },
+          minimized: false,
+          isFocused: mainFocused,
+          bounds: mainBounds,
+          mode: 'custom_ui_visual',
+        };
+      }
+      return {
+        windowId: 'w-login',
+        window: { id: 'w-login', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: loginBounds },
+        minimized: false,
+        isFocused: true,
+        bounds: loginBounds,
+        mode: 'uia_semantic',
+        buttonRefs: [{ ref: '@s1:e1', role: 'button', name: '进入微信' }],
+      };
+    },
+    adFocusWindow: async (_app, call = {}) => {
+      if (call.windowId === 'w-main') mainFocused = true;
+      return { ok: true };
+    },
+    adPress: async (combo, call = {}) => {
+      assert.equal(combo, 'return');
+      assert.equal(call.windowId, 'w-login');
+      entered = true;
+      return { ok: true };
+    },
+    adListWindows: async () => (entered
+      ? [{ id: 'w-main', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: mainFocused, minimized: false, bounds: mainBounds }]
+      : [{ id: 'w-login', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: true, minimized: false, bounds: loginBounds }]),
+  };
+  const ready = await ensureWindowReady(okDesktop, { app: 'wechat' }, { focus: true });
+  assert.equal(ready.ready, true);
+  assert.equal(ready.windowId, 'w-main');
+  assert.ok(ready.actions.includes('enter_login'));
+  assert.ok(ready.actions.includes('focus'));
+
+  let mouseClicks = 0;
+  let findCalls = 0;
+  const timeoutDesktop = {
+    adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+    adInspectCapabilities: async () => ({
+      windowId: 'w-login',
+      window: { id: 'w-login', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: loginBounds },
+      minimized: false,
+      isFocused: true,
+      bounds: loginBounds,
+      mode: 'uia_semantic',
+      buttonRefs: [{ ref: '@s1:e1', role: 'button', name: '进入微信' }],
+    }),
+    adFind: async () => {
+      findCalls += 1;
+      return { match: null };
+    },
+    adPress: async () => ({ ok: true }),
+    adListWindows: async () => [{ id: 'w-login', pid: 1001, app_name: 'Weixin.exe', title: '微信', is_focused: true, minimized: false, bounds: loginBounds }],
+    adMouseClick: async () => {
+      mouseClicks += 1;
+      return { ok: true };
+    },
+  };
+  await assert.rejects(
+    ensureWindowReady(timeoutDesktop, { app: 'wechat' }, { focus: true, launchTimeoutMs: 3900 }),
+    err => {
+      assert.equal(err?.code, 'WECHAT_LOGIN_TIMEOUT');
+      assert.deepEqual(err?.disposition, { delivery: 'not_delivered', retry: 'safe' });
+      return true;
+    },
+  );
+  assert.equal(findCalls, 1);
+  assert.equal(mouseClicks, 0, 'Must skip 3.5s coordinate click when 进入微信 button is gone');
+});
+
+test('launchDetachedViaShell and chat clickMode validate inputs strictly', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-shell-guard-'));
+  try {
+    const batFile = path.join(tmpDir, 'bad.bat');
+    fs.writeFileSync(batFile, '@echo off\r\n', 'utf8');
+    await assert.rejects(
+      winHelper.launchDetachedViaShell(batFile),
+      err => err?.code === 'INVALID_ARGS' || err?.code === 'UNSUPPORTED_PLATFORM',
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const fakeDesktop = { adOcrWindow: async () => ({}), adBatch: async () => ({}) };
+  await assert.rejects(
+    clickTextVerified(fakeDesktop, { text: '确定', clickMode: 'invalid' }),
+    { code: 'INVALID_ARGS' },
+  );
+  await assert.rejects(
+    deliverChatSessionVerified(fakeDesktop, { app: 'wechat', sessionName: '文件传输助手', clickMode: 'invalid', items: ['hi'] }),
+    { code: 'INVALID_ARGS' },
+  );
+});
+
+test('deliverChatSessionVerified supports navigationMode=keyboard_first with zero mouse clicks', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-kbd-nav-'));
+  try {
+    const imgInitial = path.join(tmpDir, 'init.png');
+    const imgNav = path.join(tmpDir, 'nav.png');
+    const imgSent = path.join(tmpDir, 'sent.png');
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `Add-Type -AssemblyName System.Drawing;
+       function New-Bmp([string]$p, [System.Drawing.Color]$c) {
+         $b = New-Object System.Drawing.Bitmap(480, 360);
+         $g = [System.Drawing.Graphics]::FromImage($b);
+         $g.Clear([System.Drawing.Color]::White);
+         $sb = New-Object System.Drawing.SolidBrush($c);
+         $g.FillRectangle($sb, 160, 80, 260, 140);
+         $sb.Dispose(); $g.Dispose();
+         $b.Save($p, [System.Drawing.Imaging.ImageFormat]::Png);
+         $b.Dispose();
+       }
+       New-Bmp '${imgInitial.replace(/'/g, "''")}' ([System.Drawing.Color]::White);
+       New-Bmp '${imgNav.replace(/'/g, "''")}' ([System.Drawing.Color]::WhiteSmoke);
+       New-Bmp '${imgSent.replace(/'/g, "''")}' ([System.Drawing.Color]::LightSkyBlue);`,
+    ], { windowsHide: true });
+
+    const origOcr = winHelper.ocrImage;
+    const origAssist = winHelper.assistForegroundWindow;
+    const mouseClicks = [];
+    let currentSession = '其他群';
+
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-kbd1',
+        window: { id: 'w-kbd1', pid: 4444, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } },
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds: { x: 0, y: 0, width: 480, height: 360 },
+      }),
+      adListWindows: async () => [{ id: 'w-kbd1', app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } }],
+      adClipboardClear: async () => ({ ok: true }),
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInitial, outPath);
+        return { path: outPath };
+      },
+      adBatch: async (steps) => {
+        for (const s of steps) {
+          if (s.command === 'mouse-click') mouseClicks.push(s);
+          if (s.command === 'press' && s.combo === 'return') currentSession = '文件传输助手';
+        }
+        const isDelivery = steps.some(s => s.command === 'clipboard-set') && currentSession === '文件传输助手' && !steps.some(s => s.combo === 'ctrl+f');
+        let shotSeq = 0;
+        const results = steps.map(s => {
+          if (s.command === 'screenshot' && s.outputPath) {
+            shotSeq += 1;
+            const src = isDelivery ? (shotSeq === 1 ? imgNav : imgSent) : imgNav;
+            fs.copyFileSync(src, s.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 8, transport: 'native-batch-stdin' };
+      },
+    };
+
+    winHelper.assistForegroundWindow = async () => ({ ok: true, focused: true, isInteractiveDefaultDesktop: true });
+    winHelper.ocrImage = async (_shotPath, opts = {}) => {
+      if (String(opts.region || '').includes('messages')) {
+        return {
+          imageWidth: 480,
+          imageHeight: 360,
+          text: '键盘优先零鼠标点击实测',
+          lines: [{ text: '键盘优先零鼠标点击实测', rawText: '键盘优先零鼠标点击实测', x: 180, y: 120, width: 120, height: 20, words: [] }],
+        };
+      }
+      return {
+        imageWidth: 480,
+        imageHeight: 360,
+        text: currentSession,
+        lines: [{ text: currentSession, rawText: currentSession, x: 180, y: 12, width: 100, height: 18, words: [] }],
+        matches: opts.find === currentSession
+          ? [{ lineText: currentSession, matchedText: currentSession, confidence: 'exact', imageRect: { x: 180, y: 12, width: 100, height: 18 }, screen: { center: { x: 230, y: 21 } } }]
+          : [],
+      };
+    };
+
+    try {
+      const res = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        sessionName: '文件传输助手',
+        navigationMode: 'keyboard_first',
+        autoDetectLayout: false,
+        items: ['键盘优先零鼠标点击实测'],
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.navigationMethod, 'search_enter');
+      assert.equal(mouseClicks.length, 0, 'keyboard_first should perform zero mouse-click steps');
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('winHelper v4 compiles cleanly via csc.exe on Windows', () => {
+  assert.equal(winHelper.HELPER_VERSION, 'win-helper-v4');
+  const exe = winHelper.ensureWinHelperCompiled();
+  assert.ok(fs.existsSync(exe));
+});
