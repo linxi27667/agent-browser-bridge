@@ -2036,3 +2036,136 @@ test('deliverChatSessionVerified auto-recovers WeChat chat tab from Moments/prev
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('vision-first navigateOnly + allowCurrentSession bypasses WinRT OCR misreads and deliverVisualMessages auto-focuses with standalone click', async () => {
+  const { execFileSync } = require('node:child_process');
+  const { deliverMessagesVerified } = require('../lib/automation/scenes/desktopComposer');
+  const origOcr = winHelper.ocrImage;
+  const origAssist = winHelper.assistForegroundWindow;
+  const origHash = winHelper.hashImageRegion;
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-vision-first-'));
+  const imgInitial = path.join(tmpDir, 'init.png');
+  const imgAfter = path.join(tmpDir, 'after.png');
+  const navShotOut = path.join(tmpDir, 'nav-verify.png');
+  try {
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-Command',
+      `Add-Type -AssemblyName System.Drawing; $b=New-Object System.Drawing.Bitmap 881,737; $g=[System.Drawing.Graphics]::FromImage($b); $g.Clear([System.Drawing.Color]::White); $g.Dispose(); $b.Save('${imgInitial.replace(/'/g, "''")}'); $b2=New-Object System.Drawing.Bitmap 881,737; $g2=[System.Drawing.Graphics]::FromImage($b2); $g2.Clear([System.Drawing.Color]::Honeydew); $g2.Dispose(); $b2.Save('${imgAfter.replace(/'/g, "''")}'); $b.Dispose(); $b2.Dispose();`,
+    ], { windowsHide: true });
+
+    let focused = false;
+    let standaloneClicks = 0;
+    const batches = [];
+    const bounds = { x: 200, y: 120, width: 895, height: 744 };
+
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-wx-vis',
+        window: { id: 'w-wx-vis', pid: 40336, app_name: 'Weixin.exe', title: '微信', is_focused: focused, bounds },
+        mode: 'custom_ui_visual',
+        isFocused: focused,
+        minimized: false,
+        bounds,
+      }),
+      adFocusWindow: async () => {
+        focused = true;
+        return { ok: true };
+      },
+      adListWindows: async () => [{ id: 'w-wx-vis', pid: 40336, app_name: 'Weixin.exe', title: '微信', is_focused: focused, minimized: false, bounds }],
+      adClipboardClear: async () => ({ ok: true }),
+      adMouseClick: async () => {
+        standaloneClicks += 1;
+        return { ok: true };
+      },
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInitial, outPath);
+        return { path: outPath };
+      },
+      adBatch: async (steps) => {
+        batches.push(steps);
+        const isDelivery = steps.some(s => s.command === 'clipboard-set') && !steps.some(s => s.combo === 'ctrl+f');
+        let shotSeq = 0;
+        const results = steps.map(s => {
+          if (s.command === 'screenshot' && s.outputPath) {
+            shotSeq += 1;
+            const useAfter = isDelivery && shotSeq === 2;
+            fs.copyFileSync(useAfter ? imgAfter : imgInitial, s.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 9, transport: 'native-batch-stdin' };
+      },
+    };
+
+    winHelper.assistForegroundWindow = async () => ({ ok: true, focused: true, isInteractiveDefaultDesktop: true });
+    winHelper.hashImageRegion = async (shotPath) => ({ ok: true, sha256: path.basename(shotPath).includes('after-delivery') ? 'msg-after' : 'msg-before' });
+    winHelper.ocrImage = async (_shotPath, opts = {}) => {
+      if (String(opts.region || '').includes('header')) {
+        return {
+          imageWidth: 881,
+          imageHeight: 737,
+          text: '物联 2401 弓至乐',
+          lines: [{ text: '物联 2401 弓至乐', rawText: '物 联 2401 弓 至 乐', x: 316, y: 49, width: 110, height: 14, words: [] }],
+          matches: [],
+        };
+      }
+      if (String(opts.region || '').includes('messages')) {
+        return { imageWidth: 881, imageHeight: 737, text: '你好', lines: [{ text: '你好', rawText: '你好', x: 520, y: 500, width: 50, height: 18, words: [] }], matches: [] };
+      }
+      return { imageWidth: 881, imageHeight: 737, text: '搜索', lines: [{ text: '搜索', rawText: '搜索', x: 90, y: 42, width: 30, height: 16, words: [] }], matches: [] };
+    };
+
+    try {
+      // 1. navigateOnly succeeds and exports screenshot even when WinRT OCR misreads "张佳乐" as "弓至乐"
+      const navRes = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        sessionName: '张佳乐',
+        navigateOnly: true,
+        saveAfterShot: navShotOut,
+      });
+      assert.equal(navRes.ok, true);
+      assert.equal(navRes.navigateOnly, true);
+      assert.equal(navRes.requiresVisualCheck, true);
+      assert.equal(navRes.headerOcrMatched, false);
+      assert.equal(navRes.headerOcrText, '物联 2401 弓至乐');
+      assert.equal(fs.existsSync(navRes.afterShotPath), true);
+
+      // 2. After model inspects screenshot with vision, allowCurrentSession sends with zero OCR header block
+      focused = false;
+      const sendRes = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        allowCurrentSession: true,
+        autoDetectLayout: false,
+        items: ['你好'],
+      });
+      assert.equal(sendRes.ok, true);
+      assert.equal(sendRes.navigationMethod, 'current_session_unverified');
+      assert.equal(sendRes.deliveredCount, 1);
+
+      // 3. deliverMessagesVerified (custom_ui_visual) without pre-supplied bounds auto-focuses via ensureWindowReady and clicks outside adBatch
+      focused = false;
+      const beforeBatches = batches.length;
+      const beforeStandaloneClicks = standaloneClicks;
+      const composerRes = await deliverMessagesVerified(mockDesktop, {
+        mode: 'custom_ui_visual',
+        app: 'Weixin.exe',
+        windowId: 'w-wx-vis',
+        composerRatio: { xRatio: 0.62, yRatio: 0.84 },
+        settleMs: 10,
+      }, ['测试消息']);
+      assert.equal(composerRes.ok, true);
+      assert.equal(focused, true, 'deliverVisualMessages must auto-focus unfocused window before adBatch');
+      assert.equal(standaloneClicks, beforeStandaloneClicks + 1);
+      const composerBatch = batches[beforeBatches];
+      assert.equal(composerBatch.some(s => s.command === 'mouse-click'), false, 'mouse-click must run standalone outside adBatch');
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+      winHelper.hashImageRegion = origHash;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

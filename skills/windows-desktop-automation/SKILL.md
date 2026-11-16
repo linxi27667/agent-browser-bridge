@@ -12,6 +12,36 @@ Follow these rules strictly before running any command:
 2. When `desktop_*` MCP tools are available (`desktop_doctor`, `desktop_chat_send`, `desktop_open_app`, `desktop_query`, `desktop_act`, `desktop_shot`, `desktop_ocr`), prefer calling the MCP tools directly instead of running shell commands inside a sandbox.
 3. For screenshots, **ALWAYS** pass `--app <name>` (or `--window-id w-<hwnd>`, `--title-includes <text>`, or `--screen 0`). Omitting a target fails immediately with `INVALID_ARGS`.
 
+### Recipe 0 (Recommended for Multimodal Vision Agents): Vision-First 2-Step Send (Zero WinRT OCR Failure)
+Traditional Windows offline OCR (`Windows.Media.Ocr`) can misread remarks/nicknames (e.g. `张佳乐` -> `弓至乐`). If you are a multimodal agent that can inspect PNG images directly via `read_file`, use **native `Ctrl+F` search + your own vision** in 2 steps:
+
+1. **Step 1 — Switch chat via `navigateOnly: true` & inspect `afterShotPath` with `read_file`:**
+```powershell
+@'
+{
+  "app": "wechat",
+  "sessionName": "张佳乐",
+  "navigateOnly": true,
+  "saveAfterShot": "C:\\Temp\\wechat-nav-verify.png"
+}
+'@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+```
+*(Or via MCP: `desktop_chat_send(app: "wechat", sessionName: "张佳乐", navigateOnly: true, saveAfterShot: "C:\\Temp\\wechat-nav-verify.png")`. Look at the PNG with `read_file` to verify the active right-pane chat header truly matches your intended recipient!)*
+
+2. **Step 2 — Once visually verified, send directly with `allowCurrentSession: true`:**
+```powershell
+@'
+{
+  "app": "wechat",
+  "allowCurrentSession": true,
+  "saveAfterShot": "C:\\Temp\\wechat-sent-proof.png",
+  "items": [
+    { "type": "text", "text": "你好，这是视觉核验后直发的消息" }
+  ]
+}
+'@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+```
+
 ### Recipe A: Send Text / Image / GIF Sticker / File to WeChat or WeCom (Auto-Wakes System Tray)
 `desktop chat-send --stdin` automatically resolves the live running process (`C:\Weixin\Weixin.exe` etc.) or registry `InstallPath` (with strict `WeChatAppEx.exe` / `WXWorkWeb.exe` mini-program isolation, plus optional `--window-id w-<hwnd>` pinning), wakes background tray-hidden windows from Windows 11/10 hidden icons overflow, auto-enters WeChat 4.x `"进入微信"` popups (or fast-fails in `<0.6s` with `WECHAT_LOGIN_REQUIRED` on QR screens), automatically recovers to the left-rail `"聊天"` tab if the window was parked on `发现/朋友圈/通讯录/收藏` or behind an in-window preview veil, verifies the chat header before sending, and restores the user's cursor in ~`14ms` (mouse-click runs **outside** the multi-step paste batch).
 
