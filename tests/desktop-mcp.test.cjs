@@ -338,6 +338,38 @@ test('MCP exposes desktop_snapshot, desktop_query, desktop_act with auto coopera
     } finally {
       try { fs.utimesSync(targetJs, origStat.atime, origStat.mtime); } catch {}
     }
+
+    // desktop_shot requires an explicit target; desktop_query action:'tray' enforces overflow write policy; desktop_chat_send advertises saveAfterShot
+    const noTargetShot = await roDispatcher.handleMessage({
+      jsonrpc: '2.0',
+      id: 81,
+      method: 'tools/call',
+      params: { name: 'desktop_shot', arguments: {} },
+    });
+    assert.equal(noTargetShot.result.isError, true);
+    assert.equal(noTargetShot.result.structuredContent.error.code, 'INVALID_ARGS');
+
+    const trayOverflowBlocked = await roDispatcher.handleMessage({
+      jsonrpc: '2.0',
+      id: 82,
+      method: 'tools/call',
+      params: { name: 'desktop_query', arguments: { action: 'tray', openOverflow: true } },
+    });
+    assert.equal(trayOverflowBlocked.result.isError, true);
+    assert.equal(trayOverflowBlocked.result.structuredContent.error.code, 'READ_ONLY_BLOCKED');
+
+    const trayListRo = await roDispatcher.handleMessage({
+      jsonrpc: '2.0',
+      id: 83,
+      method: 'tools/call',
+      params: { name: 'desktop_query', arguments: { action: 'tray' } },
+    });
+    assert.equal(trayListRo.result.isError, false);
+    assert.ok(Array.isArray(trayListRo.result.structuredContent.data.icons));
+
+    const toolsAfter = await rwDispatcher.handleMessage({ jsonrpc: '2.0', id: 84, method: 'tools/list' });
+    const chatSendDef = toolsAfter.result.tools.find(t => t.name === 'desktop_chat_send');
+    assert.ok(chatSendDef.inputSchema.properties.saveAfterShot);
   } finally {
     fs.rmSync(tmpLock, { recursive: true, force: true });
   }

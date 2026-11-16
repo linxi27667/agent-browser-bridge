@@ -1,9 +1,125 @@
 ---
 name: windows-desktop-automation
-description: Control Windows native UIA applications and custom-drawn desktop apps (WeCom/企业微信, WeChat/微信, QQ, Feishu/飞书, DingTalk/钉钉, Notepad, Explorer, etc.) through node cli/agent.cjs desktop and lib/automation. Supports app wake/launch, background WinRT OCR, OCR text clicking, foreground unlock, and verified batch delivery of text, inline images, animated GIF stickers, and files.
+description: Control Windows native UIA applications and custom-drawn desktop apps (WeCom/企业微信, WeChat/微信, QQ, Feishu/飞书, DingTalk/钉钉, Notepad, Explorer, etc.) through node cli/agent.cjs desktop and lib/automation. Supports system tray wake (Windows 11/10 hidden icons overflow), running-process discovery, app wake/launch, background WinRT OCR, 14ms cursor-restored clicking, foreground unlock, and verified batch delivery of text, inline images, animated GIF stickers, and files.
 ---
 
 # Windows Desktop Automation
+
+## 0. Foolproof Quick-Copy Recipes (Zero Flag Guessing — Start Here)
+
+Follow these rules strictly before running any command:
+1. Run all CLI commands from the repository root (`node cli/agent.cjs ...`). Use `--write --mode exclusive` for foreground/write commands — **do NOT invent `--headed`, `--target`, or `--contains`**, and **do NOT** write ad-hoc `.js` / `.ps1` / `start ""` scripts unless none of the subcommands below fit.
+2. When `desktop_*` MCP tools are available (`desktop_doctor`, `desktop_chat_send`, `desktop_open_app`, `desktop_query`, `desktop_act`, `desktop_shot`, `desktop_ocr`), prefer calling the MCP tools directly instead of running shell commands inside a sandbox.
+3. For screenshots, **ALWAYS** pass `--app <name>` (or `--window-id w-<hwnd>`, `--title-includes <text>`, or `--screen 0`). Omitting a target fails immediately with `INVALID_ARGS`.
+
+### Recipe A: Send Text / Image / GIF Sticker / File to WeChat or WeCom (Auto-Wakes System Tray)
+`desktop chat-send --stdin` automatically resolves the live running process (`C:\Weixin\Weixin.exe` etc.) or registry `InstallPath`, wakes background tray-hidden windows from Windows 11/10 hidden icons overflow, auto-enters WeChat 4.x `"进入微信"` popups (or fast-fails in `<0.6s` with `WECHAT_LOGIN_REQUIRED` on QR screens), verifies the chat header before sending, and restores the user's cursor in ~`14ms` (mouse-click runs **outside** the multi-step paste batch).
+
+**Git Bash:**
+```bash
+node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin <<'EOF'
+{
+  "app": "wechat",
+  "sessionName": "文件传输助手",
+  "launchIfMissing": true,
+  "items": [
+    { "type": "text", "text": "你好，这是自动化测试消息" },
+    { "type": "image", "path": "C:/Temp/preview.png" },
+    { "type": "sticker", "path": "C:/Temp/celebrate.gif" }
+  ]
+}
+EOF
+```
+
+**PowerShell 7 (`pwsh`):**
+```powershell
+@'
+{
+  "app": "wechat",
+  "sessionName": "文件传输助手",
+  "launchIfMissing": true,
+  "items": [
+    { "type": "text", "text": "你好，这是自动化测试消息" },
+    { "type": "image", "path": "C:\\Temp\\preview.png" },
+    { "type": "sticker", "path": "C:\\Temp\\celebrate.gif" }
+  ]
+}
+'@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+```
+
+### Recipe B: Send a Message AND Capture + Send Back the Chat Window Screenshot in 2 Calls
+Use `"saveAfterShot"` instead of running a separate `desktop shot` call:
+
+1. **Step 1 — Send initial message & save verified post-delivery screenshot (`afterShotPath`)**:
+```powershell
+@'
+{
+  "app": "wechat",
+  "sessionName": "文件传输助手",
+  "launchIfMissing": true,
+  "saveAfterShot": "C:\\Temp\\chat-proof.png",
+  "items": [
+    { "type": "text", "text": "测试截图回传准备" }
+  ]
+}
+'@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+```
+2. **Step 2 — Send the saved PNG back into the chat**:
+```powershell
+@'
+{
+  "app": "wechat",
+  "sessionName": "文件传输助手",
+  "launchIfMissing": false,
+  "items": [
+    { "type": "image", "path": "C:\\Temp\\chat-proof.png" }
+  ]
+}
+'@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+```
+
+### Recipe C: Wake an App Hidden in Windows 11/10 System Tray (`隐藏的图标 / 后台任务`)
+`open-app` already checks running processes, ignores auxiliary windows (e.g. `智能助理`, `预览`), and clicks the Windows 11 (`TopLevelWindowForOverflowXamlIsland`) / Windows 10 (`NotifyIconOverflowWindow`) system tray icon before falling back to Explorer launch:
+
+```powershell
+# Preferred: full window-ready wake (tray -> Explorer ShellExecute -> foreground unlock -> main window)
+node cli/agent.cjs --write --mode exclusive desktop open-app --app wechat
+
+# Direct tray inspection or overflow wake when debugging hidden icons:
+node cli/agent.cjs desktop tray --find 微信
+node cli/agent.cjs --write --mode exclusive desktop tray --open-overflow --find 微信
+node cli/agent.cjs --write --mode exclusive desktop tray --app wechat
+```
+*(MCP equivalents: `desktop_open_app` / `desktop_query(action: "tray", find: "微信", openOverflow: true)` / `desktop_act(command: "wake-tray", app: "wechat")`.)*
+
+### Recipe D: Screenshot & Background WinRT OCR (No Focus Steal)
+```powershell
+# Screenshot a specific app window (ALWAYS pass --app or --window-id w-...)
+node cli/agent.cjs --write desktop shot --app wechat --out C:\Temp\wechat.png
+
+# Background WinRT OCR without moving the mouse or stealing focus
+node cli/agent.cjs desktop ocr --app wechat --region full
+node cli/agent.cjs desktop ocr --app wechat --region header --find "文件传输助手"
+
+# Read help for any subcommand instead of guessing flags
+node cli/agent.cjs desktop --help
+node cli/agent.cjs desktop chat-send --help
+node cli/agent.cjs desktop tray --help
+node cli/agent.cjs desktop shot --help
+```
+
+### Error Code Decision Table (Never Write Workaround Scripts)
+
+| `error.code` / `disposition` | Meaning | Exact Next Action |
+| --- | --- | --- |
+| `WECHAT_LOGIN_REQUIRED` / `WECHAT_LOGIN_TIMEOUT` | WeChat requires QR scan or phone confirmation, or stayed on the login prompt after pressing `"进入微信"`. | **STOP immediately.** Report to the user to scan QR / confirm on their phone. Do **NOT** loop `open-app` or launch extra `.exe` copies. |
+| `DESKTOP_SANDBOX_ISOLATED` | Current shell runs inside an isolated Win32 desktop (`exebox-*`) that cannot send foreground input to `WinSta0\Default`. | Switch to the `windows-desktop` MCP tools (`desktop_chat_send`, etc.) or an interactive `WinSta0\Default` terminal. Do **NOT** attempt sandbox bypasses. |
+| `CHAT_TARGET_UNVERIFIED` | Header OCR after search/click did not match `sessionName`; **0 items were sent**. | **STOP.** Inspect sidebar/header with `desktop ocr --app <app> --region full` and verify exact `sessionName`. |
+| `DELIVERY_UNVERIFIED` or `disposition: "delivered_unverified"` / `retry: "unsafe"` | Input/paste steps were dispatched, so the message may already have been sent. | **NEVER auto-retry.** Inspect `desktop ocr --app <app> --region messages` or `desktop shot --app <app>` first. |
+| `WINDOW_NOT_FOUND` | App process may only exist in background system tray, or no window matches filters. | Run `node cli/agent.cjs --write --mode exclusive desktop open-app --app <app>` (or `desktop windows`). |
+| `INVALID_ARGS` | Missing `--app`/`--window-id` (e.g. on `desktop shot`), missing `--stdin`, or unsupported flag like `--headed`. | Run `node cli/agent.cjs desktop <sub> --help` and copy the exact template above. |
+
+---
 
 ## 1. Canonical Entry & Safety Invariants
 
@@ -16,7 +132,7 @@ Always drive Windows desktop tasks through `node cli/agent.cjs` (or `require('./
   ```powershell
   node cli/agent.cjs doctor
   ```
-  Verify `desktop.isInteractiveDefaultDesktop === true` (`threadDesktop === "Default"`). If the agent tool runs inside an isolated non-input Win32 desktop (`exebox-*`), foreground focus and `SendInput` cannot reach `WinSta0\Default` (`DESKTOP_SANDBOX_ISOLATED`) — run headed desktop commands on an interactive `WinSta0\Default` terminal instead of attempting to bypass the sandbox.
+  Verify `desktop.isInteractiveDefaultDesktop === true` (`threadDesktop === "Default"`). If the agent tool runs inside an isolated non-input Win32 desktop (`exebox-*`), foreground focus and `SendInput` cannot reach `WinSta0\Default` (`DESKTOP_SANDBOX_ISOLATED`) — use `windows-desktop` MCP tools or an interactive `WinSta0\Default` terminal instead of attempting to bypass the sandbox.
 
 ## 2. Routing: Native UIA vs Custom-Drawn Visual Apps
 
@@ -31,37 +147,39 @@ Always drive Windows desktop tasks through `node cli/agent.cjs` (or `require('./
      - Use snapshot-qualified refs (`'@s8f3k2p9:e1'`, always single-quoted in PowerShell) with `click`, `set-value`, `clear`, `select`, `toggle`, `check`, `uncheck`, `expand`, `collapse`, `scroll`, `scroll-to`, `get`, `is`, `desktop deliver --stdin`, or `desktop batch --stdin` (or MCP `desktop_snapshot` + `desktop_query` + `desktop_act`). Note: Windows UIA `focus` (`SetFocus`) moves foreground focus and requires `exclusive` mode; classic Win32/WinForms `DropDownList` `combobox` controls expose `SetValue` rather than `SelectionItem` (`adSelect` and single-step `desktop_act` `select` auto-fallback to `set-value`, while multi-step `steps[]` batches should pass `{ "command": "set-value", "ref": "@...", "value": "..." }` when `availableActions` lists `SetValue` without `Select`; budget `timeoutMs >= writeSteps * 2500 + 5000` for large batches).
    - **`custom_ui_visual`** (WeCom `WXWork.exe`, WeChat `Weixin.exe`/`WeChat.exe`, QQ, DirectUI/Qt/CEF canvases with zero client UIA controls):
      - Do **NOT** poll `find` or `snapshot` repeatedly looking for nonexistent controls.
-     - Switch immediately to `--write --mode exclusive` + background WinRT OCR (`desktop ocr`, `desktop click-text`) + `desktop chat-send --stdin` (`win-helper-v4`: Explorer shell detached launch, strict `wecom`/`wechat` isolation + WeChat 4.x `"进入微信"` auto-enter, CJK radical-folded OCR, adaptive split-pane/right-drawer `chat-layout`, click-through ripple + `18ms` cursor save/restore or `navigationMode: 'keyboard_first'`) or `desktop batch --stdin`.
-     - **WeChat login & cursor UX options**: `desktop click-text` / `desktop_click_text` accepts `--no-restore-cursor` (`restoreCursor: false`), `--no-ripple` (`ripple: false`), and `--click-mode physical_restore|message`; `desktop chat-send` / `desktop_chat_send` accepts `navigationMode: "auto" | "keyboard_first"` (zero mouse clicks when `"keyboard_first"` opens the session via `Ctrl+F` + `Return`), `composerClick`, `restoreCursor`, `ripple`, and `clickMode`. `desktop_act` also exposes `command: "cursor-overlay"` (`action: "enable" | "disable"`).
+     - Switch immediately to `--write --mode exclusive` + background WinRT OCR (`desktop ocr`, `desktop click-text`) + `desktop chat-send --stdin` (`win-helper-v5`: running-process & registry-first `exePath` discovery, Win11/10 `desktop tray` hidden-icon wake + auxiliary popup filtering, Explorer shell detached launch, strict `wecom`/`wechat` isolation, WeChat 4.x `"进入微信"` auto-enter + `<0.6s` QR fast-fail `WECHAT_LOGIN_REQUIRED`, CJK radical-folded OCR, adaptive split-pane/right-drawer `chat-layout`, single-process `14ms` cursor save/restore `click-restore` decoupled from `adBatch` + click-through ripple or `navigationMode: 'keyboard_first'`, and `saveAfterShot`).
+     - **WeChat login & cursor UX options**: `desktop click-text` / `desktop_click_text` accepts `--no-restore-cursor` (`restoreCursor: false`), `--no-ripple` (`ripple: false`), and `--click-mode physical_restore|message`; `desktop chat-send` / `desktop_chat_send` accepts `navigationMode: "auto" | "keyboard_first"` (zero mouse clicks when `"keyboard_first"` opens the session via `Ctrl+F` + `Return`), `composerClick`, `restoreCursor`, `ripple`, `clickMode`, and `saveAfterShot`. `desktop_act` also exposes `command: "cursor-overlay"` (`action: "enable" | "disable"`) and `command: "wake-tray"`.
 
 ## 3. Standard Commands (`node cli/agent.cjs desktop ...`)
 
 ```powershell
-# 1. Discover installed/running apps & visible top-level windows (read-only, zero focus steal)
+# 1. Discover installed/running apps, tray icons, & visible top-level windows (read-only, zero focus steal)
 node cli/agent.cjs desktop apps
 node cli/agent.cjs desktop windows
+node cli/agent.cjs desktop tray
 
 # 2. Wake tray-hidden window or launch app by alias (wecom/企业微信, wechat/微信, qq, feishu, dingtalk, notepad...)
 node cli/agent.cjs --write --mode exclusive desktop open-app --app wecom
+node cli/agent.cjs --write --mode exclusive desktop tray --app wechat
 
 # 3. Restore minimized window, unlock Windows ForegroundLockTimeout, and verify non-collapsed bounds
 node cli/agent.cjs --write --mode exclusive desktop ensure-ready --app WXWork.exe --launch
 
 # 4. Read-only background WinRT OCR (PrintWindow capture; does NOT steal focus!)
 #    Regions: full | header | sidebar | messages | composer | x,y,w,h
-node cli/agent.cjs desktop ocr --app WXWork.exe --region header --match "文件传输助手"
-node cli/agent.cjs desktop ocr --app WXWork.exe --region sidebar --match "文件传输助手"
+node cli/agent.cjs desktop ocr --app WXWork.exe --region header --find "文件传输助手"
+node cli/agent.cjs desktop ocr --app WXWork.exe --region sidebar --find "文件传输助手"
 
-# 5. Click visible text on a custom-drawn window via OCR coordinates
+# 5. Click visible text on a custom-drawn window via OCR coordinates (~14ms cursor restore)
 node cli/agent.cjs --write --mode exclusive desktop click-text --app WXWork.exe --text "文件传输助手" --region sidebar
 
-# 6. Capture window screenshot for visual inspection
-node cli/agent.cjs --write --mode exclusive desktop shot --app WXWork.exe --output .\wecom-check.png
+# 6. Capture window screenshot for visual inspection (always specify --app, --window-id, --title-includes, or --screen)
+node cli/agent.cjs --write desktop shot --app WXWork.exe --out C:\Temp\wecom-check.png
 ```
 
 ## 4. Verified Multi-Item Chat Delivery (Text + Image + Sticker + File)
 
-Use `desktop chat-send --stdin` (`scenes.deliverChatSessionVerified`) to open/wake a chat app, navigate to the exact session (`sidebar` OCR click -> fallback `Ctrl+F` search), enforce the **hard OCR header safety gate (`CHAT_TARGET_UNVERIFIED` aborts with 0 items sent if header does not match)**, deliver mixed items in one `adBatch` with clipboard settle delays, and verify both visual SHA-256 change and post-delivery `messages` OCR:
+Use `desktop chat-send --stdin` (`scenes.deliverChatSessionVerified`) to open/wake a chat app (including system tray overflow), navigate to the exact session (`sidebar` OCR click -> fallback `Ctrl+F` search), enforce the **hard OCR header safety gate (`CHAT_TARGET_UNVERIFIED` aborts with 0 items sent if header does not match)**, deliver mixed items in one `adBatch` (with `adMouseClick` running cleanly outside `adBatch` so cursor restores in ~`14ms`), verify both visual SHA-256 change and post-delivery `messages` OCR, and optionally export `"saveAfterShot"`:
 
 ```powershell
 @'
@@ -69,6 +187,7 @@ Use `desktop chat-send --stdin` (`scenes.deliverChatSessionVerified`) to open/wa
   "app": "wecom",
   "sessionName": "文件传输助手",
   "launchIfMissing": true,
+  "saveAfterShot": "C:\\Temp\\wecom-proof.png",
   "items": [
     { "type": "text", "text": "第一条：桌面自动化联通测试" },
     { "type": "image", "path": "C:\\temp\\chart.png" },
@@ -90,21 +209,18 @@ Use `desktop chat-send --stdin` (`scenes.deliverChatSessionVerified`) to open/wa
 ```js
 // send-wecom-filehelper.cjs
 module.exports = async function ({ desktop, scenes, step }) {
-  let delivery = null;
   await step(
     '向企业微信文件传输助手投递图文与表情包并完成核验',
-    async () => {
-      delivery = await scenes.deliverChatSessionVerified(desktop, {
-        app: 'wecom',
-        sessionName: '文件传输助手',
-        launchIfMissing: true,
-        items: [
-          { type: 'text', text: '自动化核验消息' },
-          { type: 'image', path: 'C:\\temp\\preview.png' },
-        ],
-      });
-      return delivery;
-    },
+    async () => scenes.deliverChatSessionVerified(desktop, {
+      app: 'wecom',
+      sessionName: '文件传输助手',
+      launchIfMissing: true,
+      saveAfterShot: 'C:\\temp\\wecom-proof.png',
+      items: [
+        { type: 'text', text: '自动化核验消息' },
+        { type: 'image', path: 'C:\\temp\\preview.png' },
+      ],
+    }),
     result => result.verified === true && result.deliveredCount === 2,
   );
 };
@@ -119,8 +235,8 @@ When running inside an IDE or desktop host whose shell runner isolates child pro
   - Start server: `node cli/mcp.cjs --http --port 19235 --write` (loopback `127.0.0.1` only, rejects browser `Origin` headers, requires `Authorization: Bearer <token>`)
   - Generate config snippet: `node cli/mcp.cjs --print-config --http --port 19235 --write`
 - **14 Exposed MCP Tools**:
-  - Discovery & Diagnostics: `desktop_doctor` (includes `helperVersion` + `mcpRuntime.reloadCount`), `desktop_apps`, `desktop_windows`, `desktop_capabilities` (compact by default), `desktop_open_app`, `desktop_ensure_ready`.
-  - Universal Standard UIA: `desktop_snapshot` (with `maxNodes` cap), `desktop_query` (`find | get | is | displays | surfaces`), `desktop_act` (single command or 1-process `steps[]` batch; auto-runs pure UIA in `cooperative` mode and foreground/window commands in `exclusive` mode), `desktop_deliver`.
-  - Custom-Drawn & IM Apps: `desktop_ocr` (compact token-saving output by default, ~90% smaller), `desktop_shot`, `desktop_click_text` (with `scrollRetries`, `restoreCursor`, `ripple`, `clickMode`), `desktop_chat_send` (with `win-helper-v4` detached launch, WeChat 4.x login auto-enter, CJK radical-folded OCR, adaptive split-pane/drawer layout, `navigationMode: 'keyboard_first'`, `restoreCursor`, `ripple`, `sidebarScrollPages`, and `submitKey` diagnostics).
+  - Discovery & Diagnostics: `desktop_doctor` (includes `helperVersion: "win-helper-v5"` + `mcpRuntime.reloadCount`), `desktop_apps`, `desktop_windows`, `desktop_capabilities` (compact by default), `desktop_open_app` (auto-wakes tray overflow), `desktop_ensure_ready`.
+  - Universal Standard UIA & Tray: `desktop_snapshot` (with `maxNodes` cap), `desktop_query` (`find | get | is | displays | surfaces | tray`), `desktop_act` (single command or 1-process `steps[]` batch; supports `wake-tray` & `cursor-overlay`, auto-runs pure UIA in `cooperative` mode and foreground/window commands in `exclusive` mode), `desktop_deliver`.
+  - Custom-Drawn & IM Apps: `desktop_ocr` (compact token-saving output by default, ~90% smaller), `desktop_shot` (requires explicit `app`, `windowId`, `titleIncludes`, or `screen`), `desktop_click_text` (with `scrollRetries`, `restoreCursor`, `ripple`, `clickMode`), `desktop_chat_send` (`win-helper-v5` running-process/tray wake, WeChat 4.x auto-enter + `<0.6s` QR fast-fail, CJK radical-folded OCR, adaptive split-pane/drawer layout, `14ms` cursor restore outside `adBatch`, `navigationMode: 'keyboard_first'`, `saveAfterShot`, `sidebarScrollPages`, and `submitKey` diagnostics).
 - **Auto Hot-Reload**: Modifying `lib/desktop/*.js` or `lib/automation/*.js` automatically reloads cached modules on the next idle MCP tool call without restarting the IDE.
 - **MCP Tool Rule**: If `desktop_*` MCP tools are available in the agent toolset, call `desktop_doctor` first and prefer the MCP tools over isolated shell commands.

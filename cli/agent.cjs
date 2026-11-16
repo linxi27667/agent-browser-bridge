@@ -4,7 +4,117 @@ const path = require('node:path');
 const { createAutomation, routeTask, doctor, runWorkflow, exclusiveLock, loadLocalConfig } = require('../lib/automation');
 const { fail, normalizeOptions, serializeError } = require('../lib/automation/errors');
 const appRegistry = require('../lib/desktop/appRegistry');
+const winHelper = require('../lib/desktop/winHelper');
 const sceneMod = require('../lib/cdp/scene');
+
+const SUBCOMMAND_HELP = {
+  desktop: `Desktop subcommands (node cli/agent.cjs [global options] desktop <subcommand> ...):
+
+  apps        List installed app presets and running status (read-only)
+  windows     List visible windows (--app, --window-id, --title-includes)
+  tray        Inspect or click Windows system tray / hidden background icons ("后台任务")
+  open-app    Wake tray-hidden window or launch app cleanly (--write --mode exclusive --app wechat|wecom|...)
+  ensure-ready Restore minimized window & unlock foreground (--app ..., [--launch])
+  capabilities Detect uia_semantic vs custom_ui_visual (--app ..., --no-snapshot)
+  ocr         Background WinRT OCR (--app ..., [--region full|header|sidebar|messages|composer], [--find TEXT], [--out FILE])
+  shot        Capture window or screen PNG (MUST pass --app, --window-id, --title-includes, or --screen; --out PATH requires --write)
+  click-text  OCR click text on window (--write --mode exclusive --app ..., --text "...")
+  chat-send   Verified IM delivery (text/image/sticker/file) via --stdin JSON (--write --mode exclusive)
+  deliver     Standard UIA multi-message delivery via --stdin JSON (--write)
+  batch       Raw UIA/input step array via --stdin JSON (--write [--mode exclusive])
+
+Run "node cli/agent.cjs desktop <subcommand> --help" for copy-paste examples.`,
+  'desktop:chat-send': `desktop chat-send --stdin (requires --write --mode exclusive)
+
+PowerShell example (recommended — auto-wakes tray, verifies chat header OCR, optional saveAfterShot):
+  @'
+  {
+    "app": "wechat",
+    "sessionName": "文件传输助手",
+    "launchIfMissing": true,
+    "saveAfterShot": "C:\\Users\\Public\\Pictures\\chat-proof.png",
+    "items": [
+      { "type": "text", "text": "你好，这是测试消息" },
+      { "type": "sticker", "path": "C:\\Users\\Public\\Pictures\\anim.gif" }
+    ]
+  }
+  '@ | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+
+Git Bash example:
+  cat <<'EOF' | node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin
+  {"app":"wechat","sessionName":"文件传输助手","launchIfMissing":true,"items":["你好"]}
+  EOF
+
+Options inside JSON:
+  app: wecom | wechat | qq | feishu | dingtalk | <process.exe>
+  sessionName: exact contact/group name verified against chat header OCR
+  items[]: string or {"type":"text"|"image"|"sticker"|"file", "text"|"path": ...}
+  saveAfterShot: optional PNG path to save the post-delivery chat window screenshot in the same call
+  navigationMode: "auto" | "keyboard_first" (zero mouse movement/clicks when Ctrl+F+Return opens session)`,
+  'desktop:shot': `desktop shot (MUST specify --app, --window-id, --title-includes, or --screen)
+
+Options:
+  --app <alias|exe>          e.g. wechat, wecom, qq, notepad.exe
+  --window-id <w-...>        (alias: --window) target window handle from desktop windows
+  --title-includes <substr>  match window title substring
+  --screen <index>           capture full display (0, 1, ...)
+  --out <file.png>           (alias: --output) custom path; requires --write
+
+Examples:
+  node cli/agent.cjs desktop shot --app wechat
+  node cli/agent.cjs --write desktop shot --app wechat --out .\\wechat.png
+  node cli/agent.cjs --write desktop shot --screen 0 --out .\\screen.png`,
+  'desktop:ocr': `desktop ocr (background PrintWindow + WinRT Chinese/English OCR)
+
+Options:
+  --app <alias|exe> | --window-id <w-...> | --title-includes <substr>
+  --region <full|header|sidebar|messages|composer|x,y,w,h>
+  --find <text>              (alias: --match) compact match coordinates only
+  --scale <1..4>             upscale factor (default 2)
+  --lines | --no-lines | --words | --compact
+  --out <file.png>           (alias: --output) save screenshot PNG; requires --write
+
+Example:
+  node cli/agent.cjs desktop ocr --app wechat --region header --find "文件传输助手"`,
+  'desktop:open-app': `desktop open-app (requires --write --mode exclusive)
+
+Wakes running background/system-tray app first ("后台任务" overflow + promoted tray), then shell-launches if not running.
+Options: --app <wecom|wechat|qq|feishu|dingtalk|notepad|...>, [--exe <ABS_PATH>], [--title-includes <substr>], [--focus|--no-focus], [--no-restore]
+
+Example:
+  node cli/agent.cjs --write --mode exclusive desktop open-app --app wechat`,
+  'desktop:tray': `desktop tray (inspect or click Windows taskbar system tray / "隐藏的图标·后台任务")
+
+Options:
+  --find <keyword>           filter tray icons (read-only on promoted icons; pass --write --mode exclusive --open-overflow to also scan hidden overflow)
+  --open-overflow            temporarily expand taskbar "隐藏的图标" panel to enumerate background apps (requires --write --mode exclusive)
+  --click <keyword>          click matching tray icon to wake background app (requires --write --mode exclusive)
+  --app <alias>              click tray icon matching preset app (e.g. wechat, wecom, qq) (requires --write --mode exclusive)
+  --double                   double-click instead of single-click
+
+Examples:
+  node cli/agent.cjs --write --mode exclusive desktop tray --open-overflow
+  node cli/agent.cjs --write --mode exclusive desktop tray --app wechat`,
+  'desktop:click-text': `desktop click-text (requires --write --mode exclusive)
+
+Options: --app <alias|exe>, --text <visibleText>, [--region full|header|sidebar|messages|composer], [--scroll-retries N], [--click-mode physical_restore|message], [--no-restore-cursor], [--no-ripple]`,
+  'desktop:ensure-ready': `desktop ensure-ready
+Options: --app <alias|exe>, [--window-id w-...], [--title-includes substr], [--launch], [--focus|--no-focus], [--no-restore]`,
+  browser: `Browser subcommands (node cli/agent.cjs [--scene k3] browser <subcommand> ...):
+  scenes | tabs | snap | read | click | hover | hover-click | fill | type | select | wait | press | shot | close`,
+  route: `route: choose optimal automation channel
+  Structured: node cli/agent.cjs route --url https://... | --app notepad.exe | --file data.csv
+  Quick hint: node cli/agent.cjs route "对微信窗口截图并发消息"`,
+};
+
+function isHelpArgList(args) {
+  return Array.isArray(args) && args.some(a => a === '--help' || a === '-h' || a === 'help');
+}
+
+function getSubcommandHelp(key) {
+  if (SUBCOMMAND_HELP[key]) return SUBCOMMAND_HELP[key] + '\n';
+  return HELP;
+}
 
 const HELP = `Agent Browser Bridge unified canonical entry (trusted local code, not a sandbox)
 
@@ -198,8 +308,14 @@ function attachSnapshotAndDiff(cdp, prevState, after) {
 }
 
 async function executeBrowserCommand(options, args, sceneSpec) {
-  if (!args.length) {
-    throw fail('INVALID_ARGS', 'browser requires a subcommand (scenes|tabs|snap|read|click|hover|hover-click|fill|type|select|wait|close|press|shot)');
+  if (!args.length || args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
+    if (!args.length) {
+      throw fail('INVALID_ARGS', 'browser requires a subcommand (scenes|tabs|snap|read|click|hover|hover-click|fill|type|select|wait|close|press|shot)');
+    }
+    return { helpText: getSubcommandHelp('browser') };
+  }
+  if (isHelpArgList(args)) {
+    return { helpText: getSubcommandHelp('browser') };
   }
   const [sub, ...rest] = args;
 
@@ -387,8 +503,15 @@ async function executeBrowserCommand(options, args, sceneSpec) {
 }
 
 async function executeDesktopCommand(options, args) {
-  if (!args.length) throw fail('INVALID_ARGS', 'desktop requires a command');
+  if (!args.length) throw fail('INVALID_ARGS', 'desktop requires a command (run "node cli/agent.cjs desktop --help")');
   const sub = args[0];
+  if (sub === '--help' || sub === '-h' || sub === 'help') {
+    return { helpText: getSubcommandHelp('desktop') };
+  }
+  const restAll = args.slice(1);
+  if (isHelpArgList(restAll)) {
+    return { helpText: getSubcommandHelp(`desktop:${sub}`) !== HELP ? getSubcommandHelp(`desktop:${sub}`) : getSubcommandHelp('desktop') };
+  }
 
   if (sub === 'apps') {
     const rest = args.slice(1);
@@ -403,13 +526,50 @@ async function executeDesktopCommand(options, args) {
     });
   }
 
+  if (sub === 'tray') {
+    const rest = args.slice(1);
+    const boolFlags = new Set(['--open-overflow', '--double', '--no-close']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--find', '--click', '--app', '--exclude']);
+    const wantClick = Boolean(kv['--click'] || kv['--app']);
+    const openOverflow = rest.includes('--open-overflow');
+    if (wantClick || openOverflow) {
+      if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop tray --click / --open-overflow requires --write');
+      if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop tray --click / --open-overflow requires --mode exclusive');
+    }
+    return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
+      if (wantClick) {
+        const spec = kv['--app'] ? appRegistry.resolveAppSpec(kv['--app']) : null;
+        const keywords = kv['--click']
+          ? [kv['--click']]
+          : (spec?.trayKeywords?.length ? spec.trayKeywords : [kv['--app']]);
+        const excludeKeywords = kv['--exclude']
+          ? kv['--exclude'].split(',').map(s => s.trim()).filter(Boolean)
+          : (spec?.trayExcludeKeywords || []);
+        return winHelper.activateSystemTrayIcon({
+          keywords,
+          excludeKeywords,
+          doubleClick: rest.includes('--double'),
+          signal: leaseSignal,
+          timeoutMs: options.timeoutMs,
+        });
+      }
+      return winHelper.listSystemTrayIcons({
+        find: kv['--find'],
+        openOverflow,
+        closeAfter: !rest.includes('--no-close'),
+        signal: leaseSignal,
+        timeoutMs: options.timeoutMs,
+      });
+    });
+  }
+
   if (sub === 'windows') {
     const rest = args.slice(1);
-    const kv = pairs(rest, ['--app', '--window-id', '--title-includes', '--exe']);
+    const kv = pairs(rest, ['--app', '--window-id', '--window', '--title-includes', '--exe']);
     return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
       const desktop = createAutomation({ ...options, signal: leaseSignal }).desktop;
       const found = await appRegistry.findMatchingWindows(desktop, kv['--app'], {
-        windowId: kv['--window-id'] || options.windowId,
+        windowId: kv['--window-id'] || kv['--window'] || options.windowId,
         titleIncludes: kv['--title-includes'],
         exePath: kv['--exe'],
         signal: leaseSignal,
@@ -424,7 +584,7 @@ async function executeDesktopCommand(options, args) {
     if (options.mode !== 'exclusive') throw fail('DESKTOP_FOREGROUND_REQUIRED', 'desktop open-app requires --mode exclusive');
     const rest = args.slice(1);
     const boolFlags = new Set(['--prefer-focused', '--focus', '--no-focus', '--no-restore']);
-    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--title-includes']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--window', '--title-includes']);
     const focusOpt = rest.includes('--no-focus') ? false : (rest.includes('--focus') ? true : 'auto');
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });
@@ -433,7 +593,7 @@ async function executeDesktopCommand(options, args) {
         {
           app: kv['--app'],
           exePath: kv['--exe'],
-          windowId: kv['--window-id'] || options.windowId,
+          windowId: kv['--window-id'] || kv['--window'] || options.windowId,
           titleIncludes: kv['--title-includes'],
           preferFocused: true,
         },
@@ -450,8 +610,15 @@ async function executeDesktopCommand(options, args) {
 
   if (sub === 'shot') {
     const rest = args.slice(1);
-    const kv = pairs(rest, ['--app', '--window-id', '--title-includes', '--out', '--output', '--screen']);
+    const kv = pairs(rest, ['--app', '--window-id', '--window', '--title-includes', '--out', '--output', '--screen']);
     const outArg = kv['--out'] || kv['--output'];
+    const targetWindowId = kv['--window-id'] || kv['--window'] || options.windowId;
+    if (!kv['--app'] && !targetWindowId && !kv['--title-includes'] && kv['--screen'] === undefined) {
+      throw fail(
+        'INVALID_ARGS',
+        'desktop shot requires --app <name>, --window-id <id>, --title-includes <text>, or --screen <n> (example: node cli/agent.cjs --write desktop shot --app wechat --out .\\wechat.png)',
+      );
+    }
     if (outArg && options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop shot with custom --out requires --write');
     return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
       const cdp = require('../lib/cdp');
@@ -472,16 +639,30 @@ async function executeDesktopCommand(options, args) {
         fs.writeFileSync(outPath, Buffer.from(raw.data, 'base64'));
       };
       if (kv['--screen'] !== undefined) {
-        await saveCapture({ screen: Number(kv['--screen']) });
-        return { screen: Number(kv['--screen']), outPath };
+        const screenIdx = Number(kv['--screen']);
+        if (!Number.isInteger(screenIdx) || screenIdx < 0) {
+          throw fail('INVALID_ARGS', 'desktop shot --screen requires a non-negative integer display index');
+        }
+        await saveCapture({ screen: screenIdx });
+        return { screen: screenIdx, outPath };
       }
       const found = await appRegistry.findMatchingWindows(desktop, kv['--app'], {
-        windowId: kv['--window-id'] || options.windowId,
+        windowId: targetWindowId,
         titleIncludes: kv['--title-includes'],
         signal: leaseSignal,
         timeoutMs: options.timeoutMs,
       });
-      if (!found.windows.length) throw fail('WINDOW_NOT_FOUND', 'Target window for screenshot was not found');
+      if (!found.windows.length) {
+        let msg = 'Target window for screenshot was not found';
+        if (process.platform === 'win32' && found.appSpec?.exeNames?.length) {
+          const proc = winHelper.queryRunningProcessPathSync(found.appSpec.exeNames);
+          if (proc && (proc.count > 0 || proc.exePath)) {
+            const token = kv['--app'] || found.appSpec.key || 'target';
+            msg = `Target window for screenshot was not found (process is running in background/system tray; wake it first via "open-app --app ${token}")`;
+          }
+        }
+        throw fail('WINDOW_NOT_FOUND', msg);
+      }
       const targetWin = found.windows[0];
       await saveCapture({ windowId: targetWin.id });
       return { windowId: targetWin.id, title: targetWin.title, bounds: targetWin.bounds, outPath };
@@ -492,7 +673,7 @@ async function executeDesktopCommand(options, args) {
     const rest = args.slice(1);
     const boolFlags = new Set(['--words', '--no-lines', '--lines', '--compact']);
     const kv = pairs(rest.filter(a => !boolFlags.has(a)), [
-      '--app', '--window-id', '--title-includes', '--region', '--find', '--match', '--scale', '--lang', '--max-lines', '--out', '--output',
+      '--app', '--window-id', '--window', '--title-includes', '--region', '--find', '--match', '--scale', '--lang', '--max-lines', '--out', '--output',
     ]);
     const outArg = kv['--out'] || kv['--output'];
     if (outArg && options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop ocr with custom --out requires --write');
@@ -502,7 +683,7 @@ async function executeDesktopCommand(options, args) {
     const explicitLines = rest.includes('--lines');
     return exclusiveLock(options, async (_assertHeld, leaseSignal) => {
       const ocr = await createAutomation({ ...options, signal: leaseSignal }).desktop.adOcrWindow(kv['--app'], {
-        windowId: kv['--window-id'] || options.windowId,
+        windowId: kv['--window-id'] || kv['--window'] || options.windowId,
         titleIncludes: kv['--title-includes'],
         region: kv['--region'],
         find: findQuery,
@@ -530,7 +711,7 @@ async function executeDesktopCommand(options, args) {
     const rest = args.slice(1);
     const boolFlags = new Set(['--double', '--launch', '--no-restore', '--no-restore-cursor', '--no-ripple']);
     const kv = pairs(rest.filter(a => !boolFlags.has(a)), [
-      '--app', '--exe', '--window-id', '--title-includes', '--text', '--region', '--index', '--button', '--scale', '--scroll-retries', '--scroll-dy', '--click-mode',
+      '--app', '--exe', '--window-id', '--window', '--title-includes', '--text', '--region', '--index', '--button', '--scale', '--scroll-retries', '--scroll-dy', '--click-mode',
     ]);
     return exclusiveLock(options, (_assertHeld, leaseSignal) => {
       const automation = createAutomation({ ...options, signal: leaseSignal });
@@ -539,7 +720,7 @@ async function executeDesktopCommand(options, args) {
         {
           app: kv['--app'],
           exePath: kv['--exe'],
-          windowId: kv['--window-id'] || options.windowId,
+          windowId: kv['--window-id'] || kv['--window'] || options.windowId,
           titleIncludes: kv['--title-includes'],
           text: kv['--text'],
           region: kv['--region'],
@@ -639,7 +820,7 @@ async function executeDesktopCommand(options, args) {
   if (sub === 'ensure-ready') {
     const rest = args.slice(1);
     const boolFlags = new Set(['--prefer-focused', '--focus', '--no-focus', '--no-restore', '--launch']);
-    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--title-includes']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--exe', '--window-id', '--window', '--title-includes']);
     const focusOpt = rest.includes('--no-focus') ? false : (rest.includes('--focus') ? true : 'auto');
     if (rest.includes('--launch') || rest.includes('--focus')) {
       if (options.readOnly) throw fail('READ_ONLY_BLOCKED', 'desktop ensure-ready with --launch or --focus requires --write');
@@ -652,7 +833,7 @@ async function executeDesktopCommand(options, args) {
         {
           app: kv['--app'],
           exePath: kv['--exe'],
-          windowId: kv['--window-id'] || options.windowId,
+          windowId: kv['--window-id'] || kv['--window'] || options.windowId,
           titleIncludes: kv['--title-includes'],
           preferFocused: rest.includes('--prefer-focused') ? true : undefined,
         },
@@ -670,10 +851,10 @@ async function executeDesktopCommand(options, args) {
   if (sub === 'capabilities') {
     const rest = args.slice(1);
     const boolFlags = new Set(['--prefer-focused', '--no-snapshot']);
-    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--window-id', '--title-includes']);
+    const kv = pairs(rest.filter(a => !boolFlags.has(a)), ['--app', '--window-id', '--window', '--title-includes']);
     return exclusiveLock(options, (_assertHeld, leaseSignal) => (
       createAutomation({ ...options, signal: leaseSignal }).desktop.adInspectCapabilities(kv['--app'], {
-        windowId: kv['--window-id'] || options.windowId,
+        windowId: kv['--window-id'] || kv['--window'] || options.windowId,
         titleIncludes: kv['--title-includes'],
         preferFocused: rest.includes('--prefer-focused'),
         includeSnapshot: !rest.includes('--no-snapshot'),
@@ -707,18 +888,69 @@ async function main(argv, signal) {
   }
   const options = normalizeOptions({ ...loaded.options, configInfo: loaded.config, signal });
   const [command, ...args] = parsed.rest;
+  if (!command || ['help', '--help', '-h'].includes(command)) {
+    process.stdout.write(HELP);
+    return;
+  }
   let data;
   if (command === 'doctor') {
+    if (isHelpArgList(args)) { process.stdout.write('doctor [--scene smoke]  Check desktop, OCR, and browser readiness.\n'); return; }
     if (args.length) throw fail('INVALID_ARGS', 'doctor takes no positional arguments');
     data = await doctor(options);
   } else if (command === 'route') {
-    const values = pairs(args.filter(a => !['--api', '--visual'].includes(a)), ['--url', '--app', '--file']);
-    data = routeTask({ url: values['--url'], app: values['--app'], file: values['--file'], api: args.includes('--api'), visual: args.includes('--visual') });
+    if (isHelpArgList(args)) { process.stdout.write(getSubcommandHelp('route')); return; }
+    const flagTokens = args.filter(a => a.startsWith('--'));
+    if (flagTokens.length === 0 && args.length > 0) {
+      const queryText = args.join(' ').trim();
+      const urlMatch = queryText.match(/https?:\/\/\S+/i);
+      const low = queryText.toLowerCase();
+      const inferredApp = /企业微信|企微|wecom|wxwork/.test(low) ? 'wecom'
+        : (/微信|wechat|weixin/.test(low) ? 'wechat'
+          : (/qq\b|腾讯qq/i.test(low) ? 'qq'
+            : (/记事本|notepad/.test(low) ? 'notepad' : null)));
+      if (urlMatch) {
+        data = {
+          ...routeTask({ url: urlMatch[0] }),
+          query: queryText,
+          recommendedCommand: `node cli/agent.cjs --scene smoke browser snap --open-url ${urlMatch[0]}`,
+        };
+      } else if (inferredApp) {
+        const isVisual = /微信|企微|wechat|wecom|qq|截图|发送|聊天|点击|ocr/.test(low);
+        data = {
+          ...routeTask({ app: inferredApp, visual: isVisual }),
+          app: inferredApp,
+          query: queryText,
+          recommendedCommand: /发|消息|聊天|图|表情/.test(low)
+            ? 'node cli/agent.cjs --write --mode exclusive desktop chat-send --stdin'
+            : (/截/.test(low)
+              ? `node cli/agent.cjs --write desktop shot --app ${inferredApp} --out .\\${inferredApp}.png`
+              : `node cli/agent.cjs --write --mode exclusive desktop open-app --app ${inferredApp}`),
+        };
+      } else {
+        data = {
+          ...routeTask({ visual: /截图|屏幕|窗口|desktop|点击/.test(low) }),
+          query: queryText,
+          usage: 'Pass --url <https://...>, --app <name>, --file <path>, --api, or --visual',
+        };
+      }
+    } else {
+      const values = pairs(args.filter(a => !['--api', '--visual'].includes(a)), ['--url', '--app', '--file']);
+      data = routeTask({ url: values['--url'], app: values['--app'], file: values['--file'], api: args.includes('--api'), visual: args.includes('--visual') });
+    }
   } else if (command === 'desktop') {
     data = await executeDesktopCommand(options, args);
+    if (data && typeof data === 'object' && typeof data.helpText === 'string') {
+      process.stdout.write(data.helpText);
+      return;
+    }
   } else if (command === 'browser') {
     data = await executeBrowserCommand(options, args, sceneSpec);
+    if (data && typeof data === 'object' && typeof data.helpText === 'string') {
+      process.stdout.write(data.helpText);
+      return;
+    }
   } else if (command === 'run') {
+    if (isHelpArgList(args)) { process.stdout.write('node cli/agent.cjs [--write] [--mode exclusive] run --file <workflow.cjs>\n'); return; }
     const values = pairs(args, ['--file']);
     if (!values['--file']) throw fail('INVALID_ARGS', 'run requires --file');
     const filename = path.resolve(values['--file']);

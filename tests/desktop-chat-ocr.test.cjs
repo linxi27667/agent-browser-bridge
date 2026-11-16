@@ -1008,7 +1008,10 @@ test('deliverChatSessionVerified supports sidebar wheel-scroll fallback, clickTe
         wheelCount += 1;
         return { ok: true };
       },
-      adMouseClick: async () => ({ ok: true }),
+      adMouseClick: async (x, y) => {
+        if (x === 80 && y === 200) navigated = true;
+        return { ok: true };
+      },
       adWait: async () => ({ ok: true }),
       adOcrWindow: async (_app, call) => ({
         windowId: 'w-88801',
@@ -1429,8 +1432,255 @@ test('deliverChatSessionVerified supports navigationMode=keyboard_first with zer
   }
 });
 
-test('winHelper v4 compiles cleanly via csc.exe on Windows', () => {
-  assert.equal(winHelper.HELPER_VERSION, 'win-helper-v4');
+test('winHelper v5 compiles cleanly via csc.exe on Windows and supports find-proc, tray-list, click-restore guards', { skip: process.platform !== 'win32' }, async () => {
+  assert.equal(winHelper.HELPER_VERSION, 'win-helper-v5');
   const exe = winHelper.ensureWinHelperCompiled();
   assert.ok(fs.existsSync(exe));
+
+  const procInfo = await winHelper.queryRunningProcessInfo(['node.exe']);
+  assert.equal(procInfo.ok, true);
+  assert.equal(procInfo.running, true);
+  assert.ok(procInfo.pid > 0);
+  assert.ok(procInfo.exePath.toLowerCase().endsWith('.exe'));
+
+  const trayInfo = await winHelper.listSystemTrayIcons({ openOverflow: false });
+  assert.equal(trayInfo.ok, true);
+  assert.ok(Array.isArray(trayInfo.icons));
+
+  await assert.rejects(winHelper.clickAndRestore(NaN, 100), { code: 'INVALID_ARGS' });
+});
+
+test('appRegistry prioritizes running process exePath, separates auxiliary popups, and wakes tray apps without duplicate launch', async () => {
+  const wecomSpec = appRegistry.resolveAppSpec('wecom');
+  const wxMixed = [
+    { id: 'w-assist', app_name: 'WXWork.exe', title: '企业微信-智能助理', is_focused: false, minimized: false, bounds: { x: 400, y: 200, width: 960, height: 680 } },
+    { id: 'w-prev', app_name: 'WXWork.exe', title: '预览', is_focused: false, minimized: false, bounds: { x: 420, y: 220, width: 967, height: 729 } },
+    { id: 'w-main', app_name: 'WXWork.exe', title: '企业微信', is_focused: false, minimized: false, bounds: { x: 100, y: 80, width: 900, height: 640 } },
+  ];
+  const sorted = appRegistry.matchWindowsList(wxMixed, wecomSpec, {});
+  assert.equal(sorted.length, 3);
+  assert.equal(sorted[0].id, 'w-main');
+
+  // With only auxiliary popups visible, preferMainWindow returns [] so wakeOrLaunchApp wakes the tray-hidden main window
+  const onlyAux = wxMixed.slice(0, 2);
+  assert.equal(appRegistry.matchWindowsList(onlyAux, wecomSpec, { preferMainWindow: true }).length, 0);
+  assert.equal(appRegistry.matchWindowsList(onlyAux, wecomSpec, { windowId: 'w-assist', preferMainWindow: true }).length, 1);
+
+  // If Weixin.exe is already running in tray, wakeOrLaunchApp must activate tray icon and skip duplicate shell launch
+  const origQueryProc = winHelper.queryRunningProcessInfo;
+  const origTrayActivate = winHelper.activateSystemTrayIcon;
+  const origShellLaunch = winHelper.launchDetachedViaShell;
+  let visibleAfterTray = false;
+  let shellLaunchCalls = 0;
+  let trayActivateCalls = 0;
+
+  winHelper.queryRunningProcessInfo = async () => ({
+    ok: true,
+    running: true,
+    count: 1,
+    pid: 40336,
+    exePath: process.execPath,
+    byExe: {},
+  });
+  winHelper.activateSystemTrayIcon = async () => {
+    trayActivateCalls += 1;
+    visibleAfterTray = true;
+    return { ok: true, found: true, surface: 'overflow', name: '微信', clicked: { x: 1700, y: 900 } };
+  };
+  winHelper.launchDetachedViaShell = async () => {
+    shellLaunchCalls += 1;
+    return { ok: true };
+  };
+
+  try {
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adListWindows: async () => (visibleAfterTray
+        ? [{ id: 'w-wx-main', pid: 40336, app_name: 'Weixin.exe', title: '微信', is_focused: true, minimized: false, bounds: { x: 200, y: 120, width: 900, height: 680 } }]
+        : []),
+    };
+    const woken = await appRegistry.wakeOrLaunchApp(mockDesktop, 'wechat', {});
+    assert.equal(trayActivateCalls, 1);
+    assert.equal(shellLaunchCalls, 0);
+    assert.equal(woken.wokenBy, 'tray_click');
+    assert.equal(woken.window.id, 'w-wx-main');
+  } finally {
+    winHelper.queryRunningProcessInfo = origQueryProc;
+    winHelper.activateSystemTrayIcon = origTrayActivate;
+    winHelper.launchDetachedViaShell = origShellLaunch;
+  }
+
+  // runningByExe injection in resolveAppSpec overrides default candidatePaths
+  const tmpFakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-custom-wx-'));
+  const customWeixin = path.join(tmpFakeDir, 'Weixin.exe');
+  fs.writeFileSync(customWeixin, 'stub', 'utf8');
+  try {
+    const specFromRunning = appRegistry.resolveAppSpec('wechat', {
+      runningByExe: { 'weixin.exe': { pid: 999, count: 1, exePath: customWeixin } },
+    });
+    assert.equal(specFromRunning.exePath, path.resolve(customWeixin));
+  } finally {
+    fs.rmSync(tmpFakeDir, { recursive: true, force: true });
+  }
+});
+
+test('tryEnterWechatLoginDialog fast-aborts via OCR on QR scan screen and standalone composer click restores cursor outside adBatch', { skip: process.platform !== 'win32' }, async () => {
+  const loginBounds = { x: 812, y: 390, width: 296, height: 388 };
+  const t0 = Date.now();
+  const qrOcrDesktop = {
+    adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+    adInspectCapabilities: async () => ({
+      windowId: 'w-qr',
+      window: { id: 'w-qr', pid: 555, app_name: 'Weixin.exe', title: '微信', is_focused: false, bounds: loginBounds },
+      minimized: false,
+      isFocused: false,
+      bounds: loginBounds,
+      mode: 'custom_ui_visual',
+      buttonRefs: [],
+    }),
+    adFind: async () => ({ match: null }),
+    adOcrWindow: async () => ({
+      windowId: 'w-qr',
+      text: '扫码登录\n请使用微信扫一扫登录',
+      lines: [{ text: '扫码登录' }],
+    }),
+  };
+  await assert.rejects(
+    ensureWindowReady(qrOcrDesktop, { app: 'wechat' }, { focus: true }),
+    { code: 'WECHAT_LOGIN_REQUIRED' },
+  );
+  assert.ok(Date.now() - t0 < 3000, 'QR OCR detection must fast-fail without burning 15s timeout');
+
+  // Verify standalone composer adMouseClick runs BEFORE adBatch (0 mouse-click steps inside adBatch!) + saveAfterShot works
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abb-split-click-'));
+  try {
+    const imgInit = path.join(tmpDir, 'init.png');
+    const imgAfter = path.join(tmpDir, 'after.png');
+    const savedProof = path.join(tmpDir, 'nested', 'proof.png');
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `Add-Type -AssemblyName System.Drawing;
+       function New-Shot([string]$p, [System.Drawing.Color]$c) {
+         $b = New-Object System.Drawing.Bitmap(480, 360);
+         $g = [System.Drawing.Graphics]::FromImage($b);
+         $g.Clear([System.Drawing.Color]::White);
+         $sb = New-Object System.Drawing.SolidBrush($c);
+         $g.FillRectangle($sb, 160, 80, 260, 140);
+         $sb.Dispose(); $g.Dispose();
+         $b.Save($p, [System.Drawing.Imaging.ImageFormat]::Png);
+         $b.Dispose();
+       }
+       New-Shot '${imgInit.replace(/'/g, "''")}' ([System.Drawing.Color]::White);
+       New-Shot '${imgAfter.replace(/'/g, "''")}' ([System.Drawing.Color]::CornflowerBlue);`,
+    ], { windowsHide: true });
+
+    const origOcr = winHelper.ocrImage;
+    const origAssist = winHelper.assistForegroundWindow;
+    let standaloneClicks = 0;
+    let batchMouseClicks = 0;
+    let batchCalls = 0;
+    const mockDesktop = {
+      adPolicy: () => ({ readOnly: false, mode: 'exclusive' }),
+      adInspectCapabilities: async () => ({
+        windowId: 'w-chat1',
+        window: { id: 'w-chat1', pid: 4444, app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } },
+        mode: 'custom_ui_visual',
+        isFocused: true,
+        minimized: false,
+        bounds: { x: 0, y: 0, width: 480, height: 360 },
+      }),
+      adListWindows: async () => [{ id: 'w-chat1', app_name: 'Weixin.exe', title: '微信', is_focused: true, bounds: { x: 0, y: 0, width: 480, height: 360 } }],
+      adClipboardClear: async () => ({ ok: true }),
+      adMouseClick: async () => {
+        standaloneClicks += 1;
+        return { ok: true };
+      },
+      adScreenshot: async (_app, outPath) => {
+        fs.copyFileSync(imgInit, outPath);
+        return { path: outPath };
+      },
+      adBatch: async (steps) => {
+        batchCalls += 1;
+        for (const s of steps) {
+          if (s.command === 'mouse-click') batchMouseClicks += 1;
+        }
+        let shotSeq = 0;
+        const results = steps.map(s => {
+          if (s.command === 'screenshot' && s.outputPath) {
+            shotSeq += 1;
+            fs.copyFileSync(shotSeq === 1 ? imgInit : imgAfter, s.outputPath);
+          }
+          return { ok: true, execution: 'completed' };
+        });
+        return { ok: true, results, elapsed_ms: 9, transport: 'native-batch-stdin' };
+      },
+    };
+    winHelper.assistForegroundWindow = async () => ({ ok: true, focused: true, isInteractiveDefaultDesktop: true });
+    winHelper.ocrImage = async (_shotPath, opts = {}) => {
+      if (String(opts.region || '').includes('messages')) {
+        return { imageWidth: 480, imageHeight: 360, text: '你好', lines: [{ text: '你好', rawText: '你好', x: 180, y: 100, width: 60, height: 20, words: [] }] };
+      }
+      return {
+        imageWidth: 480,
+        imageHeight: 360,
+        text: '文件传输助手',
+        lines: [{ text: '文件传输助手', rawText: '文件传输助手', x: 180, y: 12, width: 100, height: 18, words: [] }],
+        matches: [{ lineText: '文件传输助手', matchedText: '文件传输助手', confidence: 'exact', imageRect: { x: 180, y: 12, width: 100, height: 18 }, screen: { center: { x: 230, y: 21 } } }],
+      };
+    };
+
+    try {
+      const res = await deliverChatSessionVerified(mockDesktop, {
+        app: 'wechat',
+        sessionName: '文件传输助手',
+        navigationMode: 'auto',
+        autoDetectLayout: false,
+        saveAfterShot: savedProof,
+        items: ['你好'],
+      });
+      assert.equal(res.ok, true);
+      assert.equal(standaloneClicks, 1, 'Composer click should use standalone 14ms clickAndRestore call');
+      assert.equal(batchMouseClicks, 0, 'Long clipboard/paste/screenshot adBatch must NOT hold cursor via mouse-click step');
+      assert.equal(batchCalls, 1);
+      assert.equal(res.afterShotPath, path.resolve(savedProof));
+      assert.ok(fs.existsSync(savedProof));
+    } finally {
+      winHelper.ocrImage = origOcr;
+      winHelper.assistForegroundWindow = origAssist;
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('cli/agent.cjs supports subcommand --help, enforces explicit desktop shot targets, and handles natural-language route queries', () => {
+  const { spawnSync } = require('node:child_process');
+  const agentCli = path.resolve(__dirname, '..', 'cli', 'agent.cjs');
+  const runCli = args => spawnSync(process.execPath, [agentCli, ...args], { encoding: 'utf8', windowsHide: true });
+
+  for (const helpArgs of [
+    ['desktop', '--help'],
+    ['desktop', 'shot', '--help'],
+    ['desktop', 'chat-send', '--help'],
+    ['desktop', 'tray', '--help'],
+    ['desktop', 'open-app', '--help'],
+    ['route', '--help'],
+    ['browser', '--help'],
+  ]) {
+    const r = runCli(helpArgs);
+    assert.equal(r.status, 0, `${helpArgs.join(' ')} failed: ${r.stdout} ${r.stderr}`);
+    assert.ok(r.stdout.trim().length > 20);
+  }
+
+  const shotNoTarget = runCli(['--write', '--mode', 'exclusive', 'desktop', 'shot', '--out', 'x.png']);
+  assert.equal(shotNoTarget.status, 1);
+  const shotErr = JSON.parse(shotNoTarget.stdout);
+  assert.equal(shotErr.error.code, 'INVALID_ARGS');
+  assert.match(shotErr.error.message, /requires --app/i);
+
+  const nlRoute = runCli(['route', '对微信窗口截图并发送自我介绍']);
+  assert.equal(nlRoute.status, 0, nlRoute.stdout + nlRoute.stderr);
+  const nlParsed = JSON.parse(nlRoute.stdout);
+  assert.equal(nlParsed.data.app, 'wechat');
+  assert.match(nlParsed.data.recommendedCommand, /chat-send|shot/);
 });
